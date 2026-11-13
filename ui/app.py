@@ -13,7 +13,11 @@ st.caption("Assessment evidence, learner support and reviewed agent reports")
 
 def api(method, path, **kwargs):
     use_proxy = urlsplit(API).hostname not in {"127.0.0.1", "localhost"}
-    response = httpx.request(method, API + path, headers={"Authorization": "Bearer " + st.session_state.get("token", "")}, timeout=110, trust_env=use_proxy, **kwargs)
+    headers = {}
+    token = st.session_state.get("token")
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    response = httpx.request(method, API + path, headers=headers, timeout=110, trust_env=use_proxy, **kwargs)
     if response.status_code >= 400:
         if response.status_code == 401:
             st.session_state.pop("token", None)
