@@ -3,15 +3,32 @@
 Each test pins one behaviour so a future change cannot quietly undo it.
 """
 import time
-from sqlalchemy import event, select
+from contextlib import contextmanager
+from sqlalchemy import event
 from pae import api
 from pae.db import LoginSession
 from pae.security import token_hash
 
 
+@contextmanager
+def open_session(client):
+    """A test database session that is ALWAYS closed afterwards.
+
+    An unclosed session keeps its connection inside an open transaction.
+    On PostgreSQL that blocks the next test's DROP TABLE forever.
+    """
+    sessions = client.app.dependency_overrides[api.get_db]()
+    db = next(sessions)
+    try:
+        yield db
+    finally:
+        sessions.close()
+
+
 def count_selects(client):
     """Count SELECT statements sent to the test database while a block runs."""
-    engine = client.app.dependency_overrides[api.get_db]().__next__().get_bind()
+    with open_session(client) as db:
+        engine = db.get_bind()
     counter = {"n": 0}
 
     def before(conn, cursor, statement, *args):
@@ -64,16 +81,17 @@ def test_unknown_email_runs_a_full_password_check(client, monkeypatch):
 
 
 def test_expired_sessions_are_deleted(client, teacher):
-    session = client.app.dependency_overrides[api.get_db]().__next__()
-    session.add(LoginSession(token_hash=token_hash("old-token"), user_id=1, expires=time.time() - 10))
-    session.commit()
+    with open_session(client) as session:
+        session.add(LoginSession(token_hash=token_hash("old-token"), user_id=1, expires=time.time() - 10))
+        session.commit()
     assert client.get("/classes", headers={"Authorization": "Bearer old-token"}).status_code == 401
-    assert session.get(LoginSession, token_hash("old-token")) is None
-    session.add(LoginSession(token_hash=token_hash("old-2"), user_id=1, expires=time.time() - 10))
-    session.commit()
+    with open_session(client) as session:
+        assert session.get(LoginSession, token_hash("old-token")) is None
+        session.add(LoginSession(token_hash=token_hash("old-2"), user_id=1, expires=time.time() - 10))
+        session.commit()
     assert client.post("/auth/login", json={"email": "teacher@example.test", "password": "a-long-test-password"}).status_code == 200
-    session.expire_all()
-    assert session.get(LoginSession, token_hash("old-2")) is None, "login sweeps expired sessions"
+    with open_session(client) as session:
+        assert session.get(LoginSession, token_hash("old-2")) is None, "login sweeps expired sessions"
 
 
 def test_rate_limit_memory_is_bounded(monkeypatch):
