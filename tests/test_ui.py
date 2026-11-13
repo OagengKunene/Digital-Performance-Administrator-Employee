@@ -106,3 +106,17 @@ def test_principal_can_enable_non_ai_monitoring(backend):
     next(button for button in page.button if button.label == "Save monitoring policy").click().run()
     assert not page.exception
     assert page.success
+
+
+def test_offline_engine_and_demonstration_from_the_interface(backend, monkeypatch):
+    from pae.config import settings
+    for name, value in {"google_api_key": "", "groq_api_key": "", "ai_provider": "offline"}.items():
+        monkeypatch.setattr(settings(), name, value)
+    page = sign_in("teacher@example.test", "a-long-test-password")
+    page.sidebar.radio[0].set_value("Agent reports").run()
+    engine = next(box for box in page.selectbox if box.label == "Engine")
+    assert engine.value == "offline"
+    next(box for box in page.checkbox if box.label.startswith("Demonstrate self-correction")).check().run()
+    next(button for button in page.button if button.label == "Run agent team").click().run()
+    assert not page.exception
+    assert any("queued" in item.value.lower() for item in page.success)

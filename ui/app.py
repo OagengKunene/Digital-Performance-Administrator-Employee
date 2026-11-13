@@ -46,7 +46,7 @@ try:
                 st.session_state.token = response["access_token"]
                 st.session_state.role = response["role"]
                 st.rerun()
-        st.info("For evaluation accounts, run the documented bootstrap command and open .local/bootstrap-login.txt in your private Codespace.")
+        st.info("Demo school: sign-in details are in .local/demo-login.txt (created by scripts/demo.py). Other evaluation accounts: .local/bootstrap-login.txt.")
         st.stop()
     st.sidebar.write("Signed in as " + st.session_state.get("role", "staff"))
     if st.sidebar.button("Sign out"):
@@ -143,14 +143,23 @@ try:
         st.subheader("Digital employee reports")
         runtime = api("GET", "/agent-runtime")
         st.caption("The coordinator plans work and delegates to ADK specialists. Completed stages are saved. Numerical verification does not certify every narrative claim; staff review remains necessary.")
-        st.write("Selected provider:", runtime["provider"], "· Model:", runtime["model"])
-        if not runtime["configured"]:
-            st.warning("Add the selected provider's API key through Codespaces secrets, then restart the Codespace.")
+        labels = {"offline": "Offline rules — no API key, instant, reproducible",
+                  "groq": "Groq — live model", "gemini": "Gemini — live model"}
+        choices = [name for name in ["offline", "groq", "gemini"] if runtime["available_providers"].get(name)]
+        default = choices.index(runtime["provider"]) if runtime["provider"] in choices else 0
+        provider = st.selectbox("Engine", choices, index=default, format_func=lambda name: labels[name])
+        st.caption("Installation default: " + runtime["provider"] + " · " + runtime["model"]
+                   + (" · Fallback: " + runtime["fallback_provider"] if runtime["fallback_provider"] else ""))
+        demonstrate = False
+        if provider == "offline":
+            demonstrate = st.checkbox("Demonstrate self-correction: the first report draft leaves out the "
+                                      "missing-marks statement, so the reviewer must send it back for repair")
         if runtime["worker_last_seen"] is None:
             st.info("No worker heartbeat yet. Start all services with python scripts/start.py.")
         goal = st.text_area("Task", value="Review this class's performance and prepare a teacher report with evidence-based support recommendations.")
-        if st.button("Run agent team", disabled=not runtime["configured"]):
-            queued = api("POST", f"/classes/{cid}/runs", json={"goal": goal})
+        if st.button("Run agent team"):
+            queued = api("POST", f"/classes/{cid}/runs", json={"goal": goal, "provider": provider,
+                                                                "demonstrate_repair": demonstrate})
             st.success("Report queued. You can leave this page; the worker saves progress.")
         st.download_button("Download statistical report (no AI interpretation)",
             json.dumps(api("GET", f"/classes/{cid}/statistics"), indent=2),
@@ -169,7 +178,12 @@ try:
                     if progress:
                         st.write("Current stage:", progress["active_stage"] or "finished")
                         st.write("Saved stages:", ", ".join(progress["completed_stages"]) or "none")
+                        st.write("Engine:", progress["provider"], "·", progress["model"])
                         st.write("Dispatched attempts:", progress["request_attempts"], "/", progress["request_budget"])
+                        if progress.get("repair_count"):
+                            st.write("Reviewer repairs:", progress["repair_count"])
+                        if progress.get("demonstrate_repair"):
+                            st.caption("Demonstration run: the first draft deliberately omitted the coverage statement.")
                         if run["status"] == "retrying":
                             st.info("Only the failed stage is waiting for its next attempt.")
                     st.json(run["result"])

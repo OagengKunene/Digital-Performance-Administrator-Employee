@@ -77,3 +77,8 @@ Sources:
 - https://adk.dev/runtime/resume/
 - https://console.groq.com/docs/models
 - https://docs.github.com/en/codespaces
+
+
+## Offline provider
+
+`pae/offline_engine.py` registers provider `offline` (model `deterministic-rules-v1`). `jobs.process_one` uses it instead of `agents.run_stage` when the chosen provider is `offline`, so durable jobs, stage checkpoints, `SCHEMAS` validation, `review_numbers`, the reviewer repair loop, snapshot fencing, cancellation and audit are identical to live runs. It needs no key and no network, and is not paced. Its reviewer also requires the coverage statement when marks are missing and rejects recommendations not produced by the intervention planner. `demonstrate_repair` (offline only, stored on the job and the audit entry) makes the first reporting draft omit the coverage statement so the repair loop is observable. Offline text is rule-based, not model reasoning; runs record `provider: offline`.

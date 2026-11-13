@@ -7,6 +7,10 @@ from .config import settings
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 
+OFFLINE_MODEL = "deterministic-rules-v1"
+PROVIDERS = ["gemini", "groq", "offline"]
+
+
 class ProviderNotConfigured(Exception):
     pass
 
@@ -18,6 +22,9 @@ def provider_details(provider=None):
         return provider, config.groq_model, config.groq_api_key
     if provider == "gemini":
         return provider, config.gemini_model, config.google_api_key
+    if provider == "offline":
+        # Deterministic rules run locally: there is no key, so the marker is non-empty.
+        return provider, OFFLINE_MODEL, "local-rules-no-key"
     raise ProviderNotConfigured()
 
 
@@ -26,6 +33,8 @@ def configured(provider=None):
 
 
 def make_model(provider, model):
+    if provider == "offline":
+        raise ProviderNotConfigured()  # offline stages never build a model
     _, _, key = provider_details(provider)
     if not key:
         raise ProviderNotConfigured()

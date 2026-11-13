@@ -33,9 +33,9 @@ def baseline_report(data):
             "definitions": data.get("definitions", {}), "ai_interpretation": "Not included"}
 
 
-def enqueue(db, user, class_id, goal, *, trigger="manual", dedupe_key=None):
+def enqueue(db, user, class_id, goal, *, trigger="manual", dedupe_key=None, provider=None, demonstrate_repair=False):
     data = evidence(db, user, class_id)
-    provider, model, _ = provider_details()
+    provider, model, _ = provider_details(provider)
     if dedupe_key:
         existing = db.scalar(select(AgentJob).where(AgentJob.dedupe_key == dedupe_key))
         if existing:
@@ -51,10 +51,12 @@ def enqueue(db, user, class_id, goal, *, trigger="manual", dedupe_key=None):
         fallback=settings().ai_fallback_provider, snapshot=data, dedupe_key=dedupe_key,
         state={"outputs": {}, "attempts": {}, "request_attempts": 0, "repair_count": 0,
                "request_budget": settings().ai_max_model_calls, "trigger": trigger,
-               "source_hash": fingerprint(data), "active_stage": "coordinator"}))
+               "source_hash": fingerprint(data), "active_stage": "coordinator",
+               "demonstrate_repair": bool(demonstrate_repair)}))
     db.flush()
     audit(db, user, class_id, "agent_job_queued", {"run_id": identifier, "trigger": trigger,
-                                                "provider": provider, "model": model})
+                                                "provider": provider, "model": model,
+                                                "demonstrate_repair": bool(demonstrate_repair)})
     return run
 
 
@@ -85,6 +87,8 @@ def public_run(db, run):
             "request_budget": state.get("request_budget"),
             "next_attempt_at": job.next_at, "provider": job.provider, "model": job.model,
             "trigger": state.get("trigger"), "updated_at": job.updated_at,
+            "demonstrate_repair": state.get("demonstrate_repair", False),
+            "repair_count": state.get("repair_count", 0),
             "completed_outputs": state.get("outputs", {}),
             "resumable": job.status == "failed" and
                 state.get("request_attempts", 0) < state.get("request_budget", 0)}
@@ -226,8 +230,13 @@ async def process_one(factory, executor=None):
     async def on_request(event):
         checkpoint_event(factory, identifier, owner, event)
 
+    runner = executor or run_stage
+    if executor is None and chosen_provider == "offline":
+        from functools import partial
+        from .offline_engine import offline_stage
+        runner = partial(offline_stage, demonstrate_repair=state.get("demonstrate_repair", False))
     try:
-        result = await (executor or run_stage)(stage, data, goal, state["outputs"],
+        result = await runner(stage, data, goal, state["outputs"],
             chosen_provider, model, str(uuid.uuid4()), on_request=on_request)
         try:
             result = SCHEMAS[stage].model_validate(result).model_dump()
