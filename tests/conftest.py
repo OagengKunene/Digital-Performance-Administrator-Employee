@@ -22,12 +22,12 @@ def client():
         engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     with Session(engine) as db:
-        db.add_all([User(id=1, email="teacher@example.test", password_hash=hash_password("a-long-test-password"), role="teacher", school="One"),
-                    User(id=2, email="principal@example.test", password_hash=hash_password("a-long-test-password"), role="principal", school="One"),
-                    User(id=3, email="other@example.test", password_hash=hash_password("a-long-test-password"), role="teacher", school="One"),
-                    User(id=4, email="outsider@example.test", password_hash=hash_password("a-long-test-password"), role="principal", school="Two")])
+        db.add_all([User(email="teacher@example.test", password_hash=hash_password("a-long-test-password"), role="teacher", school="One"),
+                    User(email="principal@example.test", password_hash=hash_password("a-long-test-password"), role="principal", school="One"),
+                    User(email="other@example.test", password_hash=hash_password("a-long-test-password"), role="teacher", school="One"),
+                    User(email="outsider@example.test", password_hash=hash_password("a-long-test-password"), role="principal", school="Two")])
         db.flush()
-        db.add_all([SchoolClass(id=1, school="One", name="10A", subject="Maths", teacher_id=1), SchoolClass(id=2, school="One", name="10B", subject="Maths", teacher_id=3), SchoolClass(id=3, school="Two", name="11A", subject="Maths", teacher_id=4)])
+        db.add_all([SchoolClass(school="One", name="10A", subject="Maths", teacher_id=1), SchoolClass(school="One", name="10B", subject="Maths", teacher_id=3), SchoolClass(school="Two", name="11A", subject="Maths", teacher_id=4)])
         db.flush()
         for i, score in enumerate([12, 15, 18, None], 1):
             db.add(Learner(id=f"L{i}", class_id=1, name=f"Learner {i}"))
