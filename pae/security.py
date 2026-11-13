@@ -15,6 +15,11 @@ def hash_password(password):
     return f"pbkdf2_sha256$600000${salt}${digest}"
 
 
+# A real hash of a random password. Checked when the email is unknown, so an
+# unknown email takes as long as a wrong password (no account guessing by timing).
+DUMMY_HASH = hash_password(secrets.token_urlsafe(32))
+
+
 def verify_password(password, stored):
     _, rounds, salt, digest = stored.split("$")
     actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), int(rounds)).hex()
@@ -29,7 +34,11 @@ def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bear
     if not credentials:
         raise HTTPException(401, "Sign in required")
     login = db.get(LoginSession, token_hash(credentials.credentials))
-    if not login or login.expires < time.time():
+    if login and login.expires < time.time():
+        db.delete(login)  # an expired session is never valid again; remove it
+        db.commit()
+        login = None
+    if not login:
         raise HTTPException(401, "Session expired or invalid")
     user = db.get(User, login.user_id)
     if not user:
