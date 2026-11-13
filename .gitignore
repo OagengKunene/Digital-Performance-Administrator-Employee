@@ -218,3 +218,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# School records and local secrets
+.local/
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3

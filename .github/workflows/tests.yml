@@ -1,0 +1,30 @@
+name: Application checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: pae
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: pae_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pae -d pae_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.lock.txt
+      - run: python -m pip install --no-deps -e .
+      - run: python -m pytest -q
+      - run: python -m pytest -q
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://pae:test_password@localhost:5432/pae_test

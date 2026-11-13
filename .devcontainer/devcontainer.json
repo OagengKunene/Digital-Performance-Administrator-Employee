@@ -1,0 +1,16 @@
+{
+  "name": "Performance Administrator",
+  "dockerComposeFile": "compose.yaml",
+  "service": "workspace",
+  "workspaceFolder": "/workspaces/pae",
+  "remoteUser": "vscode",
+  "shutdownAction": "stopCompose",
+  "forwardPorts": [8501, 8000],
+  "portsAttributes": {
+    "8501": {"label": "School application", "onAutoForward": "openBrowser"},
+    "8000": {"label": "Authenticated API", "onAutoForward": "silent"}
+  },
+  "postCreateCommand": "python scripts/setup.py",
+  "customizations": {"vscode": {"extensions": ["ms-python.python", "ms-python.vscode-pylance", "ms-vsliveshare.vsliveshare"], "settings": {"python.defaultInterpreterPath": "/workspaces/pae/.venv/bin/python"}}},
+  "secrets": {"GOOGLE_API_KEY": {"description": "Gemini API key for live agents. Core school administration works without this.", "documentationUrl": "https://aistudio.google.com/app/apikey"}}
+}

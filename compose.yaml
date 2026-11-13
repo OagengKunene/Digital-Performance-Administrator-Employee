@@ -1,0 +1,31 @@
+services:
+  app:
+    build: .
+    volumes:
+      - app-state:/app/.local
+    ports:
+      - "127.0.0.1:8501:8501"
+      - "127.0.0.1:8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://pae:pae_local_only@db:5432/pae
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: pae
+      POSTGRES_PASSWORD: pae_local_only
+      POSTGRES_DB: pae
+    volumes:
+      - school-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pae -d pae"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+volumes:
+  school-data:
+  app-state:

@@ -1,0 +1,26 @@
+services:
+  workspace:
+    image: mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
+    volumes:
+      - ..:/workspaces/pae:cached
+    command: sleep infinity
+    environment:
+      DATABASE_URL: postgresql+psycopg://pae:pae_local_only@db:5432/pae
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: pae
+      POSTGRES_PASSWORD: pae_local_only
+      POSTGRES_DB: pae
+    volumes:
+      - school-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pae -d pae"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+volumes:
+  school-data:
