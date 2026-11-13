@@ -7,7 +7,8 @@ def test_additive_table_initialisation_preserves_old_accounts_and_reports():
     engine = create_engine("sqlite://")
     old = [table for table in Base.metadata.sorted_tables if table.name not in {
         "agent_jobs", "monitoring_policies", "monitor_followups",
-        "worker_heartbeats", "automatic_report_budgets"}]
+        "worker_heartbeats", "automatic_report_budgets", "assessment_sources", "ingestion_batches",
+        "capture_events", "notification_preferences", "report_notifications", "email_deliveries"}]
     Base.metadata.create_all(engine, tables=old)
     with Session(engine) as db:
         user = User(email="existing@example.test", password_hash="existing-hash", role="principal", school="Existing")

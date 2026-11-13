@@ -20,6 +20,17 @@ class Settings(BaseSettings):
     ai_retry_delay_seconds: int = Field(default=15, ge=1, le=120)
     worker_poll_seconds: float = Field(default=2, ge=0.1, le=30)
     autonomous_daily_report_limit: int = Field(default=1, ge=0, le=100)
+    ingestion_inbox_root: str = ".local/assessment-inbox"
+    ingestion_settle_seconds: float = Field(default=2, ge=0, le=60)
+    capture_retry_seconds: int = Field(default=900, ge=60, le=86400)
+    email_delivery_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_security: Literal["starttls", "ssl"] = "starttls"
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    email_retry_attempts: int = Field(default=5, ge=1, le=10)
 
 
 @lru_cache

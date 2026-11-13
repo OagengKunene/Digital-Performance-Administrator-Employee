@@ -2,7 +2,9 @@
 
 An autonomous, multi-agent school employee under active development. It proactively monitors authorised class records, creates in-app teacher follow-ups, plans investigations with an ADK coordinator, delegates to specialist agents, evaluates their reports and preserves progress after failures.
 
-This milestone implements record monitoring and reviewed reporting. Curriculum planning, script/rubric assessment, teacher-absence cover materials and external notification delivery remain development work. See [architecture and delivery status](docs/architecture.md).
+Every accepted marks/attendance capture now automatically evaluates the class and delivers a factual report to its assigned teacher and school principals. The ADK team adds a reviewed agent interpretation in the background. Connect a CSV export source once; routine captures need no task prompt or Run button. In-app inboxes work by default; optional TLS SMTP adds email.
+
+See [automatic capture and delivery](docs/automatic-capture.md) for source setup, routing, retries and email configuration. Curriculum planning, handwritten script/rubric assessment and teacher-absence cover materials remain development work.
 
 ## Upgrade your existing Codespace
 
@@ -13,7 +15,7 @@ git pull --ff-only origin main
 .venv/bin/python scripts/setup.py
 ```
 
-Setup installs the pinned environment and adds the new job/monitoring tables.
+Setup installs the pinned environment and adds the new capture/source/delivery tables.
 Existing users, marks, credentials and historical reports are preserved.
 Do not recreate the sample school or delete the database.
 
@@ -44,7 +46,13 @@ The default provider remains Gemini for compatibility. Use `AI_PROVIDER=gemini` 
 
 Sample accounts: `principal@example.test`, `teacher@example.test`, `other.teacher@example.test`. Teachers see assigned classes; the principal sees school classes. Grade 10A has three recorded marks averaging **75%** and one missing mark out of four expected. Missing results remain distinct from zero.
 
-## Run and recover an agent investigation
+## Automatic reports after mark capture
+
+Open **Assessment sources**, register the school's marks or attendance export and configure its displayed watched directory or authenticated upload endpoint. The worker validates and captures new exports automatically. The assigned teacher and school principals receive a data report in **Reports inbox**, followed by a reviewed agent report when the provider is available. Ordinary imports and audited mark corrections trigger the same workflow automatically.
+
+No task prompt is required. Conflicting or unsupported source values are flagged for evidence; marks are never guessed. Read the [setup guide](docs/automatic-capture.md) before connecting an upstream source or SMTP. **Email requires a configured mail server and real registered staff addresses; fictional sample accounts receive in-app reports.**
+
+## Optional manual agent investigations
 
 Select a class, open **Agent reports**, enter a goal and choose **Run agent team**.
 The API returns immediately with a queued job. A worker performs these stages:
@@ -57,9 +65,9 @@ The API returns immediately with a queued job. A worker performs these stages:
 
 Successful stages are saved to SQL before the next one starts. The normal full path has five model requests; the coordinator can omit the two optional specialist stages. Each stage permits one inference attempt per dispatch. Repairs and provider retries use additional attempts within the whole-report budget, which defaults to ten.
 
-The reviewer can send a draft back for up to two repairs. Host code checks the report's structured metrics and the reviewer's checked metrics against the original evidence. Changed school records block automatic publication of an outdated snapshot.
+The reviewer can send a draft back for up to two repairs. Host code checks the report's structured metrics and the reviewer's checked metrics against the original evidence. Changed school records block publication for manual and scheduled-current-state investigations. Capture evaluations remain explicitly timestamped historical snapshots when newer captures arrive.
 
-If a stage fails, its completed predecessors remain visible in **Saved intermediate work**. Selected transient errors receive bounded, delayed retries of that stage. Quota/authentication errors pause instead of being retried repeatedly. **Resume from saved progress** can use a configured provider for unfinished work. Historical reports created before this version have no stage checkpoints and cannot be resumed.
+If a stage fails, its completed predecessors remain visible in **Saved intermediate work**. Selected transient errors receive bounded, delayed retries of that stage. Quota/authentication errors pause. Capture-triggered work is reconsidered after a configurable cooldown within the original total attempt budget. **Resume from saved progress** can use a configured provider for unfinished work. Historical reports created before this version have no stage checkpoints and cannot be resumed.
 
 The interface polls progress while open. You may leave and return; the worker runs independently. **Cancel further processing** fences the job against later publication. An inference request already sent may still finish. A statistical report without AI interpretation is always available separately.
 
@@ -75,9 +83,9 @@ As principal, select a class and open **Autonomous monitoring**:
 
 The monitor needs no prompt for each cycle. It detects missing captured topic marks, learners below the configured support-review threshold, supplied absence records and overdue recorded interventions. It assigns in-app follow-ups to the class teacher, closes issues when evidence resolves them, and flags overdue follow-ups to the principal. Teachers can record acknowledgements and resolution evidence.
 
-Automatic AI investigations are opt-in. They use the coordinator and specialists, not fabricated reports. Limits apply per class and installation: `AUTONOMOUS_DAILY_REPORT_LIMIT` defaults to **one initiated automatic report per UTC day** across the installation. Manual reports still consume provider quota separately. This application cap does not replace the provider's quota system. Failed/cancelled automatic jobs conservatively consume the initiation cap.
+Scheduled AI investigations are opt-in. Capture-triggered reports run automatically and are independent of this scheduled-monitor policy. They use the coordinator and specialists, not fabricated reports. Limits apply per class and installation: `AUTONOMOUS_DAILY_REPORT_LIMIT` defaults to **one initiated scheduled-monitor report per UTC day** across the installation. Capture-triggered and manual reports consume provider quota separately and do not use this scheduled cap. This application cap does not replace the provider's quota system. Failed/cancelled automatic jobs conservatively consume the initiation cap.
 
-Monitoring and reports run only while the worker is running. Codespaces is a development environment, not an always-on school host. Follow-ups and escalation are in-app; email/SMS delivery is not implemented.
+Monitoring and reports run only while the worker is running. Codespaces is a development environment, not an always-on school host. Teacher/principal report inboxes are implemented, with optional durable TLS SMTP delivery. SMS is not implemented.
 
 ## Provider and worker settings
 
@@ -138,7 +146,7 @@ Run `python scripts/setup.py`. Without `DATABASE_URL`, SQLite in `.local/` is a 
 .venv/bin/python -m streamlit run ui/app.py --server.address 0.0.0.0 --server.port 8501
 ```
 
-Use separate terminals. `python -m pae.worker --once` performs one monitoring cycle and at most one job stage for operational checks.
+Use separate terminals. `python -m pae.worker --once` performs one source/delivery/monitoring control cycle and at most one job stage for operational checks.
 
 ## Collaboration and verification
 

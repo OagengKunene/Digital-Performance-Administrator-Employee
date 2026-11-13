@@ -159,6 +159,79 @@ class AutomaticReportBudget(Base):
     used: Mapped[int] = mapped_column(default=0)
 
 
+class AssessmentSource(Base):
+    __tablename__ = "assessment_sources"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"))
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str]
+    kind: Mapped[str] = mapped_column(default="marks")
+    enabled: Mapped[bool] = mapped_column(default=True)
+    allow_corrections: Mapped[bool] = mapped_column(default=False)
+    ingestion_token_hash: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[str] = mapped_column(default=utcnow)
+
+
+class IngestionBatch(Base):
+    __tablename__ = "ingestion_batches"
+    __table_args__ = (UniqueConstraint("source_id", "content_hash"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_id: Mapped[str] = mapped_column(ForeignKey("assessment_sources.id"))
+    filename: Mapped[str]
+    content: Mapped[str]
+    content_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(default="pending")
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[str] = mapped_column(default=utcnow)
+    next_at: Mapped[float] = mapped_column(default=0.0)
+
+
+class CaptureEvent(Base):
+    __tablename__ = "capture_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"))
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    kind: Mapped[str]
+    changed_records: Mapped[int]
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    source_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[str] = mapped_column(default=utcnow)
+    evaluation_status: Mapped[str] = mapped_column(default="pending")
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("agent_runs.id"), nullable=True, unique=True)
+
+
+class NotificationPreference(Base):
+    __tablename__ = "notification_preferences"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    email_enabled: Mapped[bool] = mapped_column(default=False)
+
+
+class ReportNotification(Base):
+    __tablename__ = "report_notifications"
+    __table_args__ = (UniqueConstraint("recipient_id", "dedupe_key"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    recipient_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"))
+    dedupe_key: Mapped[str] = mapped_column(String(160))
+    kind: Mapped[str]
+    title: Mapped[str]
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[str] = mapped_column(default=utcnow)
+    read_at: Mapped[str | None] = mapped_column(nullable=True)
+
+
+class EmailDelivery(Base):
+    __tablename__ = "email_deliveries"
+    id: Mapped[str] = mapped_column(ForeignKey("report_notifications.id"), primary_key=True)
+    status: Mapped[str] = mapped_column(default="pending")
+    attempts: Mapped[int] = mapped_column(default=0)
+    next_at: Mapped[float] = mapped_column(default=0.0)
+    lease_owner: Mapped[str] = mapped_column(default="")
+    lease_until: Mapped[float] = mapped_column(default=0.0)
+    last_error: Mapped[str] = mapped_column(default="")
+    sent_at: Mapped[str | None] = mapped_column(nullable=True)
+
+
 def make_engine(url):
     if url.startswith("sqlite"):
         Path(".local").mkdir(exist_ok=True)

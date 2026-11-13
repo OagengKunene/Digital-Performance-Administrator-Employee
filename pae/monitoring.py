@@ -34,6 +34,38 @@ def findings(data, today=None):
     return desired
 
 
+def sync_findings(db, school_class, data, now):
+    class_id = school_class.id
+    desired = findings(data, datetime.fromtimestamp(now, timezone.utc).date())
+    existing = {row.issue_key: row for row in db.scalars(
+        select(FollowUp).where(FollowUp.class_id == class_id))}
+    changed = []
+    for key, detail in desired.items():
+        row = existing.get(key)
+        if not row:
+            row = FollowUp(class_id=class_id, issue_key=key,
+                assigned_to=school_class.teacher_id, detail=detail, due_at=now + 86400)
+            db.add(row)
+            changed.append(key)
+        else:
+            if row.status == "resolved" and row.detail != detail:
+                row.status, row.due_at, row.escalated = "open", now + 86400, False
+                row.outcome = ""
+                changed.append(key)
+            row.assigned_to, row.detail = school_class.teacher_id, detail
+            if row.status != "resolved" and now > row.due_at and not row.escalated:
+                row.escalated = True
+                changed.append("escalated:" + key)
+            row.updated_at = utcnow()
+    for key, row in existing.items():
+        if not key.startswith("ingestion:") and key not in desired and row.status != "resolved":
+            row.status = "resolved"
+            row.outcome = "Automatically closed because this issue no longer appears in current evidence."
+            row.updated_at = utcnow()
+            changed.append("closed:" + key)
+    return changed
+
+
 def check_due(factory, now=None):
     now = time.time() if now is None else now
     with factory() as db:
@@ -49,33 +81,7 @@ def check_due(factory, now=None):
             return True
         data = evidence(db, user, policy.class_id)
         current_hash = fingerprint(data)
-        desired = findings(data, datetime.fromtimestamp(now, timezone.utc).date())
-        existing = {row.issue_key: row for row in db.scalars(
-            select(FollowUp).where(FollowUp.class_id == policy.class_id))}
-        changed = []
-        for key, detail in desired.items():
-            row = existing.get(key)
-            if not row:
-                row = FollowUp(class_id=policy.class_id, issue_key=key,
-                    assigned_to=school_class.teacher_id, detail=detail, due_at=now + 86400)
-                db.add(row)
-                changed.append(key)
-            else:
-                if row.status == "resolved" and row.detail != detail:
-                    row.status, row.due_at, row.escalated = "open", now + 86400, False
-                    row.outcome = ""
-                    changed.append(key)
-                row.assigned_to, row.detail = school_class.teacher_id, detail
-                if row.status != "resolved" and now > row.due_at and not row.escalated:
-                    row.escalated = True
-                    changed.append("escalated:" + key)
-                row.updated_at = utcnow()
-        for key, row in existing.items():
-            if key not in desired and row.status != "resolved":
-                row.status = "resolved"
-                row.outcome = "Automatically closed because this issue no longer appears in current evidence."
-                row.updated_at = utcnow()
-                changed.append("closed:" + key)
+        changed = sync_findings(db, school_class, data, now)
         day = datetime.fromtimestamp(now, timezone.utc).date().isoformat()
         if not db.get(AutomaticReportBudget, day):
             try:

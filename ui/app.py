@@ -79,7 +79,7 @@ try:
     selected = st.sidebar.selectbox("Class", classes, format_func=lambda c: c["name"] + " · " + c["subject"])
     cid = selected["id"]
     data = api("GET", f"/classes/{cid}/evidence")
-    view = st.sidebar.radio("Workspace", ["Overview", "Import records", "Learner support", "Agent reports", "Autonomous monitoring", "Audit history"])
+    view = st.sidebar.radio("Workspace", ["Overview", "Reports inbox", "Assessment sources", "Import records", "Learner support", "Agent reports", "Autonomous monitoring", "Audit history"])
     if view == "Overview":
         st.subheader(selected["name"] + " · " + selected["subject"])
         cols = st.columns(3)
@@ -93,6 +93,91 @@ try:
         with st.expander("Metric definitions"):
             st.json(data["definitions"])
         st.download_button("Download evidence JSON", json.dumps(data, indent=2), file_name=f"class-{cid}-evidence.json", mime="application/json")
+    elif view == "Reports inbox":
+        st.subheader("Automatically delivered reports")
+        st.caption("Assigned teachers and school principals receive capture reports here automatically. Data reports arrive independently of AI availability.")
+        preference = api("GET", "/notification-preferences")
+        with st.expander("Email delivery settings"):
+            st.write("Registered staff address:", preference["registered_email"])
+            st.write("Email service configured:", preference["smtp_configured"])
+            if preference["usable_address"]:
+                with st.form("email-delivery"):
+                    enabled = st.checkbox("Also email future reports", value=preference["email_enabled"])
+                    if st.form_submit_button("Save email preference"):
+                        api("PUT", "/notification-preferences", json={"email_enabled": enabled})
+                        st.success("Preference saved for future reports")
+            else:
+                st.info("The fictional sample address receives in-app reports. Create a staff account with its real address for email delivery.")
+        @st.fragment(run_every="5s")
+        def inbox():
+            messages = api("GET", "/notifications")
+            if not messages:
+                st.info("Reports appear automatically after the next accepted marks or attendance capture.")
+            for message in messages:
+                with st.expander(message["created_at"] + " · " + message["title"], expanded=False):
+                    st.caption("In-app: delivered · Email: " + message["email_status"])
+                    if message["email_last_error"]:
+                        st.caption(message["email_last_error"])
+                    payload = message["payload"]
+                    report = payload.get("report", {})
+                    st.write(report.get("summary", ""))
+                    st.caption(payload.get("scope", ""))
+                    metrics = {key: report[key] for key in ["mean_percentage", "assessment_count", "marked_count", "missing_count"] if key in report}
+                    if metrics:
+                        st.dataframe([metrics], hide_index=True)
+                    for action in report.get("recommendations", report.get("actions", [])):
+                        st.write("• " + action)
+                    if report.get("review"):
+                        st.caption("Agent review completed; source metrics checked. Staff can inspect or override the report.")
+                    st.download_button("Download report", json.dumps(payload, indent=2),
+                        file_name="report-" + message["id"] + ".json", key="download-" + message["id"])
+                    if not message["read_at"] and st.button("Mark read", key="read-" + message["id"]):
+                        api("POST", "/notifications/" + message["id"] + "/read")
+                        st.rerun(scope="fragment")
+        inbox()
+    elif view == "Assessment sources":
+        st.subheader("Automatic assessment capture")
+        st.caption("Connect an existing marks/attendance CSV export once. New source records are validated, captured, evaluated and routed without a Run button. Scripts and handwritten work require a separate marking integration.")
+        with st.expander("Connect a source"):
+            with st.form("new-source"):
+                name = st.text_input("Source name", value="School marks export")
+                kind = st.selectbox("Source record type", ["marks", "attendance"])
+                corrections = st.checkbox("Allow this source to correct already captured values", value=False)
+                if st.form_submit_button("Connect source"):
+                    result = api("POST", f"/classes/{cid}/sources", json={"name": name, "kind": kind, "allow_corrections": corrections})
+                    st.session_state["new_ingestion_key"] = {"id": result["id"], "key": result.pop("ingestion_key")}
+                    st.success("Source connected. Configure its export destination once below.")
+        sources = api("GET", f"/classes/{cid}/sources")
+        for source in sources:
+            with st.expander(source["name"] + " · " + source["kind"], expanded=True):
+                st.write("Server inbox directory (write completed CSV files here):")
+                st.code(source["inbox_folder"], language=None)
+                st.write("Or configure the export system to POST UTF-8 CSV to:")
+                st.code(API + source["upload_endpoint"], language=None)
+                st.caption("Authenticate the export with the X-Ingestion-Key header. Use the deployed API address when the school system runs elsewhere.")
+                key = st.session_state.get("new_ingestion_key", {})
+                if key.get("id") == source["id"]:
+                    st.text_input("Source key — save privately; shown only in this session", value=key["key"], type="password", key="key-" + source["id"])
+                if st.button("Rotate source key", key="rotate-" + source["id"]):
+                    result = api("POST", f"/classes/{cid}/sources/{source['id']}/rotate-key")
+                    st.session_state["new_ingestion_key"] = {"id": source["id"], "key": result["ingestion_key"]}
+                    st.rerun()
+                with st.form("configure-source-" + source["id"]):
+                    enabled = st.checkbox("Source enabled", value=source["enabled"])
+                    corrections = st.checkbox("Permit audited corrections from this source", value=source["allow_corrections"])
+                    if st.form_submit_button("Save source settings"):
+                        api("PUT", f"/classes/{cid}/sources/{source['id']}", json={"enabled": enabled, "allow_corrections": corrections})
+                        st.rerun()
+        @st.fragment(run_every="5s")
+        def source_progress():
+            st.subheader("Source processing")
+            batches = api("GET", f"/classes/{cid}/ingestion-batches")
+            for batch in batches:
+                with st.expander(batch["filename"] + " · " + batch["status"]):
+                    st.json(batch["result"])
+            st.subheader("Automatic evaluations")
+            st.dataframe(api("GET", f"/classes/{cid}/captures"), hide_index=True)
+        source_progress()
     elif view == "Import records":
         if st.session_state.get("role") == "principal":
             roster = st.file_uploader("Learner roster CSV (learner_id,name)", type=["csv"], key="roster")
@@ -102,12 +187,12 @@ try:
         kind = st.selectbox("Record type", ["marks", "attendance"])
         st.write("Marks columns: learner_id,assessment,topic,earned,possible")
         st.write("Attendance columns: learner_id,day,status")
-        st.caption("Blank earned values remain missing. Duplicate uploads are rejected atomically.")
+        st.caption("Every accepted change automatically delivers a data report and queues the agent evaluation. No task prompt is needed. Blank earned values remain missing.")
         st.dataframe(api("GET", f"/classes/{cid}/learners"), hide_index=True)
         file = st.file_uploader("CSV file", type=["csv"])
         if file and st.button("Validate and import"):
             result = api("POST", f"/classes/{cid}/imports/{kind}", json={"csv": file.getvalue().decode("utf-8-sig")})
-            st.success(f"Imported {result['inserted']} records")
+            st.success(f"Imported {result['inserted']} records. The capture report was delivered to staff inboxes; agent evaluation follows automatically.")
         with st.expander("Correct an existing mark"):
             records = api("GET", f"/classes/{cid}/marks")
             if records:

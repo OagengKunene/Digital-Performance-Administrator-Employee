@@ -23,7 +23,8 @@ def main():
         directory = Path(folder)
         env = dict(os.environ, DATABASE_URL="sqlite:///" + str(directory / "school.db"),
                    GOOGLE_API_KEY="", GROQ_API_KEY="", AI_PROVIDER="gemini",
-                   AI_FALLBACK_PROVIDER="", WORKER_POLL_SECONDS="0.1")
+                   AI_FALLBACK_PROVIDER="", WORKER_POLL_SECONDS="0.1",
+                   INGESTION_INBOX_ROOT=str(directory / "source-inboxes"), INGESTION_SETTLE_SECONDS="0")
         subprocess.run([sys.executable, "-m", "pae.manage", "bootstrap", "--sample"],
                        cwd=directory, env=env, check=True, stdout=subprocess.DEVNULL)
         with (directory / "services.log").open("w+") as log:
@@ -68,7 +69,35 @@ def main():
                     runtime = client.get("http://127.0.0.1:8000/agent-runtime", headers=headers).json()
                     assert runtime["worker_last_seen"] is not None
                     assert not runtime["configured"]
-                    print("PASS: API/UI health, login, worker, autonomous follow-up and statistical report.")
+                    source = client.post(prefix + "/sources", headers=headers,
+                        json={"name": "Automatic school export", "kind": "marks"})
+                    source.raise_for_status()
+                    connected = source.json()
+                    folder = Path(connected["inbox_folder"])
+                    folder.mkdir(parents=True, exist_ok=True)
+                    # Act as the school's scheduled export, without any report prompt.
+                    (folder / "export.csv").write_text(
+                        "learner_id,assessment,topic,earned,possible\nG101-004,Sample Test 1,Algebra,15,20\n")
+                    deadline = time.monotonic() + 15
+                    while True:
+                        batches = client.get(prefix + "/ingestion-batches", headers=headers).json()
+                        if any(batch["status"] == "completed" for batch in batches):
+                            break
+                        if time.monotonic() > deadline:
+                            raise RuntimeError("Source file was not captured automatically: " + str(batches))
+                        time.sleep(0.2)
+                    messages = client.get("http://127.0.0.1:8000/notifications", headers=headers).json()
+                    report = next(m["payload"]["report"] for m in messages if m["kind"] == "capture_evaluation")
+                    assert report["marked_count"] == 4 and report["missing_count"] == 0
+                    assert report["mean_percentage"] == 75 and report["assessment_count"] == 1
+                    teacher = next(line.split() for line in credentials if line.startswith("teacher@example.test"))
+                    response = client.post("http://127.0.0.1:8000/auth/login",
+                        json={"email": teacher[0], "password": teacher[1]})
+                    response.raise_for_status()
+                    teacher_headers = {"Authorization": "Bearer " + response.json()["access_token"]}
+                    delivered = client.get("http://127.0.0.1:8000/notifications", headers=teacher_headers).json()
+                    assert any(m["kind"] == "capture_evaluation" for m in delivered)
+                    print("PASS: all three services, watched CSV capture, verified evaluation, automatic teacher/principal inbox delivery, no AI key or report prompt.")
             except Exception:
                 log.flush()
                 log.seek(0)

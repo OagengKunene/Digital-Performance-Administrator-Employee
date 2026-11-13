@@ -13,12 +13,12 @@ def output(stage, *, approve=True, analyse=True, support=True):
         "coordinator": {"rationale": "Investigate recorded class evidence.",
             "analyse_performance": analyse, "plan_support": support, "focus_topics": ["Algebra"]},
         "performance_analyst": {"findings": ["75% across three marked records; one missing."]},
-        "intervention_planner": {"recommendations": ["Teacher should investigate the missing mark."]},
+        "intervention_planner": {"recommendations": ["Verify the original scripts and mark register for the 1 missing topic record(s); capture results only when supported by the source."]},
         "reporting_agent": {"summary": "Class evidence shows three marked records and one missing mark.",
             "mean_percentage": 75.0, "marked_count": 3, "missing_count": 1,
-            "recommendations": ["Investigate the missing mark before interpreting its cause."]},
+            "recommendations": ["Verify the original scripts and mark register for the 1 missing topic record(s); capture results only when supported by the source."]},
         "quality_reviewer": {"approved": approve, "issues": [] if approve else ["Clarify the evidence limitation."],
-            "checked_mean_percentage": 75.0, "checked_marked_count": 3, "checked_missing_count": 1},
+            "checked_mean_percentage": 75.0, "checked_marked_count": 3, "checked_missing_count": 1, "checked_assessment_count": 1},
     }[stage]
 
 
