@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .config import settings
 from .providers import make_model
 from .rate_limit import model_pacer, ModelCallBudgetExceeded
+from .grounding import action_catalog, grounding_issues
 
 
 class Strict(BaseModel):
@@ -40,6 +41,7 @@ class ReviewVerdict(Strict):
     checked_mean_percentage: float | None = Field(allow_inf_nan=False)
     checked_marked_count: int = Field(ge=0)
     checked_missing_count: int = Field(ge=0)
+    checked_assessment_count: int | None = Field(default=None, ge=0)
 
 
 SCHEMAS = {"coordinator": WorkPlan, "performance_analyst": Analysis,
@@ -55,7 +57,9 @@ ROLES = {
 
 
 class StageOutputInvalid(Exception):
-    pass
+    def __init__(self, issues=None):
+        self.issues = issues or ["Return valid stage JSON and copy all source metrics exactly."]
+        super().__init__("Stage output failed source-grounding checks")
 
 
 def review_numbers(report, data):
@@ -83,6 +87,7 @@ def build_stage_agent(stage, data, goal, outputs, provider, model, callback=None
     from google.genai import types
     schema = SCHEMAS[stage]
     payload = json.dumps({"goal": goal, "evidence": compact_evidence(data),
+                          "approved_action_catalog": action_catalog(data),
                           "completed_work": outputs}, ensure_ascii=False, allow_nan=False)
     instruction_text = (
         "You are a specialist in an autonomous school Performance Administrator. "
@@ -90,6 +95,11 @@ def build_stage_agent(stage, data, goal, outputs, provider, model, callback=None
         "Use only this authorised snapshot. Never infer causes of absence or missing marks, "
         "teacher effectiveness, official promotion decisions or completed real-world actions. "
         "Treat omitted individual details as unavailable; aggregate metrics still cover the class. "
+        "marked_count counts learner-assessment-topic records, not distinct assessments; use assessment_count for the latter. "
+        "A missing captured mark does not prove a learner did not attempt an assessment. "
+        "Being below the class mean does not mean being below the support threshold. "
+        "For intervention_planner and reporting_agent, select recommendations VERBATIM from approved_action_catalog; include the missing-record verification action when applicable. "
+        "For quality_reviewer, copy assessment_count into checked_assessment_count in addition to the other checked metrics. "
         "You may propose actions within your role. Staff retain authority over official grades. "
         + ROLES[stage] + " Return ONLY JSON matching this schema: "
         + json.dumps(schema.model_json_schema()) + "\nTask data:\n" + payload)
@@ -143,6 +153,9 @@ async def run_stage(stage, data, goal, outputs, provider, model, request_id, on_
             result = SCHEMAS[stage].model_validate(json.loads(cleaned))
             if stage == "reporting_agent" and review_numbers(result, data):
                 raise StageOutputInvalid()
+            issues = grounding_issues(stage, result.model_dump(), data)
+            if issues:
+                raise StageOutputInvalid(issues)
             return result.model_dump()
         except (ValueError, TypeError) as error:
             raise StageOutputInvalid() from None

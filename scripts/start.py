@@ -1,4 +1,4 @@
-"""Run API and interface together, terminating both when either exits."""
+"""Run the API, autonomous worker and interface as one supervised process group."""
 import os
 import subprocess
 import sys
@@ -12,7 +12,7 @@ from pae.db import engine
 from sqlalchemy import inspect
 
 config = settings()
-if not inspect(engine).has_table("agent_jobs"):
+if not inspect(engine).has_table("capture_events"):
     raise SystemExit("Run .venv/bin/python scripts/setup.py to install dependencies and initialise the new tables.")
 from pae.providers import provider_details
 provider, model, _ = provider_details()

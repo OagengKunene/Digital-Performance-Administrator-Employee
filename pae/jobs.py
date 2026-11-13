@@ -33,8 +33,12 @@ def baseline_report(data):
             "definitions": data.get("definitions", {}), "ai_interpretation": "Not included"}
 
 
-def enqueue(db, user, class_id, goal, *, trigger="manual", dedupe_key=None, provider=None, demonstrate_repair=False):
-    data = evidence(db, user, class_id)
+def enqueue(db, user, class_id, goal, *, trigger="manual", dedupe_key=None, snapshot=None,
+            provider=None, demonstrate_repair=False):
+    allowed_class(db, user, class_id)
+    data = copy.deepcopy(snapshot) if snapshot is not None else evidence(db, user, class_id)
+    if data.get("class_id") != class_id:
+        raise ValueError("Snapshot class mismatch")
     provider, model, _ = provider_details(provider)
     if dedupe_key:
         existing = db.scalar(select(AgentJob).where(AgentJob.dedupe_key == dedupe_key))
@@ -148,6 +152,8 @@ def save(factory, identifier, owner, state, status, result, *, event, next_at=0)
         db.get(AgentJob, identifier).active_class_id = run.class_id if status in ACTIVE else None
         run.status, run.result = status, result
         run.events = [*run.events, {**event, "at": utcnow()}]
+        from .captures import job_updated
+        job_updated(db, run, db.get(AgentJob, identifier))
         db.commit()
 
 
@@ -176,6 +182,7 @@ def resume(db, run, provider=None):
 
 async def process_one(factory, executor=None):
     from .agents import run_stage, StageOutputInvalid, ReviewedReport, SCHEMAS
+    from .grounding import grounding_issues
     from .ai_diagnostics import describe_ai_error
     from .providers import ProviderNotConfigured
     claimed = claim(factory)
@@ -246,13 +253,16 @@ async def process_one(factory, executor=None):
             from .agents import review_numbers
             if review_numbers(ReviewedReport.model_validate(result), data):
                 raise StageOutputInvalid()
+        issues = grounding_issues(stage, result, data)
+        if issues:
+            raise StageOutputInvalid(issues)
         state["outputs"][stage] = result
         state.pop("stage_provider", None)
         status, response, event_type = "queued", {"message": "Stage saved."}, "stage_completed"
         if stage == "quality_reviewer":
             verdict = ReviewVerdict.model_validate(result)
             issues = list(verdict.issues)
-            for field in ["mean_percentage", "marked_count", "missing_count"]:
+            for field in ["mean_percentage", "marked_count", "missing_count"] + (["assessment_count"] if "assessment_count" in data else []):
                 if getattr(verdict, "checked_" + field) != data[field]:
                     issues.append("Independent review metrics do not match source: " + field)
             report = ReviewedReport.model_validate(state["outputs"]["reporting_agent"])
@@ -279,14 +289,15 @@ async def process_one(factory, executor=None):
                         not policy or not policy.enabled or not policy.use_ai)
                 if automation_stopped:
                     status, response = "cancelled", {"message": "Automatic AI monitoring was disabled."}
-                elif fingerprint(current) != state["source_hash"]:
+                elif state.get("trigger") != "capture" and fingerprint(current) != state["source_hash"]:
                     status = "requires_review"
                     response = {"message": "Class records changed after this snapshot; generate a new report.",
                                 "error_code": "snapshot_changed",
                                 "statistical_report": baseline_report(data)}
                 else:
                     status = "verified_metrics"
-                    response = {**report.model_dump(), "review": verdict.model_dump(),
+                    response = {**report.model_dump(), "assessment_count": data.get("assessment_count"),
+                                "review": verdict.model_dump(),
                                 "source_hash": state["source_hash"]}
         state["active_stage"] = next_stage(state) if status == "queued" else None
         if status != "verified_metrics":
@@ -311,8 +322,7 @@ async def process_one(factory, executor=None):
         elif isinstance(error, StageOutputInvalid):
             detail = {"message": "Stage output failed schema or numerical validation.",
                       "error_code": "stage_output_invalid", "provider_code": None}
-            state["outputs"]["review_feedback"] = {"issues": [
-                "Return valid stage JSON and copy all source metrics exactly."]}
+            state["outputs"]["review_feedback"] = {"issues": error.issues}
         else:
             detail = describe_ai_error(error)
         count = state["attempts"][stage]
@@ -333,5 +343,6 @@ async def process_one(factory, executor=None):
         save(factory, identifier, owner, state, status, detail,
              event={"type": "stage_failed", "agent": stage, "error_code": detail["error_code"],
                     "provider_code": detail.get("provider_code")},
-             next_at=time.time() + delay if status == "retrying" else 0)
+             next_at=time.time() + (delay if status == "retrying" else settings().capture_retry_seconds)
+                     if status in {"retrying", "failed"} else 0)
     return True

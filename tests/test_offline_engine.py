@@ -147,10 +147,21 @@ def test_demo_credentials_file_is_private(tmp_path):
 
 def test_overdue_support_is_labelled():
     from datetime import date, timedelta
-    from pae.offline_engine import intervention_planner
-    data = {"learners": [], "topics": [], "support_threshold": 50.0, "interventions": [
+    from pae.offline_engine import performance_analyst
+    data = {"learners": [], "topics": [], "support_threshold": 50.0, "mean_percentage": None, "marked_count": 0,
+            "expected_marks": 0, "missing_count": 0, "learner_count": 2, "attendance_recorded_status_counts": {},
+            "interventions": [
         {"id": 1, "learner_id": "A", "topic": "Algebra", "due": (date.today() - timedelta(days=2)).isoformat(), "status": "assigned"},
         {"id": 2, "learner_id": "B", "topic": "Geometry", "due": (date.today() + timedelta(days=2)).isoformat(), "status": "assigned"}]}
-    recs = intervention_planner(data, "goal", {})["recommendations"]
-    assert "OVERDUE" in recs[0] and "#1" in recs[0]
-    assert "OVERDUE" not in recs[1]
+    findings = [f for f in performance_analyst(data, "goal", {})["findings"] if f.startswith("Open support")]
+    assert "OVERDUE" in findings[0] and "#1" in findings[0]
+    assert "OVERDUE" not in findings[1]
+
+
+def test_offline_recommendations_pass_grounding():
+    from pae.grounding import grounding_issues
+    from pae.offline_engine import intervention_planner
+    data = {"missing_count": 3, "learners": [{"support_review": True}], "support_threshold": 50,
+            "attendance_recorded_status_counts": {"absent": 2, "present": 8}, "topics": [{"topic": "Algebra"}]}
+    plan = intervention_planner(data, "goal", {})
+    assert grounding_issues("intervention_planner", plan, data) == []

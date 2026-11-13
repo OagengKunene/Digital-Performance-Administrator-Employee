@@ -12,7 +12,7 @@ from .db import get_db, User, LoginSession, SchoolClass, Learner, Mark, Interven
 from .security import current_user, verify_password, hash_password, token_hash
 from .services import allowed_class, audit, evidence, import_csv, wake_monitor
 
-app = FastAPI(title="Performance Administrator", version="0.2.0")
+app = FastAPI(title="Performance Administrator", version="0.3.0")
 attempts = defaultdict(deque)
 
 
@@ -154,7 +154,7 @@ def import_roster(class_id: int, body: Upload, user=Depends(current_user), db=De
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "0.2.0"}
+    return {"status": "ok", "version": "0.3.0"}
 
 
 @app.get("/ready")
@@ -225,10 +225,13 @@ def correct(class_id: int, mark_id: int, body: Correction, user=Depends(current_
     if body.earned is not None and not 0 <= body.earned <= mark.possible:
         raise HTTPException(422, "Mark outside range")
     audit(db, user, class_id, "correct_mark", {"mark_id": mark_id, "before": mark.earned, "after": body.earned, "reason": body.reason})
+    changed = mark.earned != body.earned
     mark.earned = body.earned
     wake_monitor(db, class_id)
+    from .captures import record_capture
+    capture_id = record_capture(db, user, class_id, "mark_correction", int(changed))
     db.commit()
-    return {"corrected": mark_id}
+    return {"corrected": mark_id, "capture_id": capture_id}
 
 
 @app.get("/classes/{class_id}/marks")
@@ -378,6 +381,8 @@ def cancel_run(class_id: int, identifier: str, user=Depends(current_user), db=De
     job.active_class_id = None
     run.status = "cancelled"
     run.result = {"message": "Further processing cancelled. Completed stages remain saved."}
+    from .captures import job_updated
+    job_updated(db, run, job)
     audit(db, user, class_id, "agent_job_cancelled", {"run_id": run.id})
     db.commit()
     return public_run(db, run)
@@ -431,3 +436,189 @@ def update_follow_up(class_id: int, identifier: int, body: FollowUpOutcome,
     audit(db, user, class_id, "monitor_follow_up_updated", {"id": identifier, **body.model_dump()})
     db.commit()
     return {"updated": identifier}
+
+
+class SourceBody(StrictBody):
+    name: str = Field(min_length=1, max_length=120)
+    kind: Literal["marks", "attendance"] = "marks"
+    allow_corrections: bool = False
+
+
+class SourceSettings(StrictBody):
+    enabled: bool = True
+    allow_corrections: bool = False
+
+
+class EmailPreferenceBody(StrictBody):
+    email_enabled: bool = False
+
+
+@app.get("/classes/{class_id}/sources")
+def get_sources(class_id: int, user=Depends(current_user), db=Depends(get_db)):
+    from .db import AssessmentSource
+    from .ingestion import public_source
+    allowed_class(db, user, class_id)
+    return [public_source(s) for s in db.scalars(select(AssessmentSource).where(AssessmentSource.class_id == class_id))]
+
+
+@app.post("/classes/{class_id}/sources", status_code=201)
+def register_source(class_id: int, body: SourceBody, user=Depends(current_user), db=Depends(get_db)):
+    from .ingestion import create_source, public_source
+    source, key = create_source(db, user, class_id, **body.model_dump())
+    result = {**public_source(source), "ingestion_key": key}
+    db.commit()
+    return result
+
+
+def scoped_source(db, user, class_id, identifier):
+    from .db import AssessmentSource
+    allowed_class(db, user, class_id)
+    source = db.get(AssessmentSource, identifier)
+    if not source or source.class_id != class_id:
+        raise HTTPException(404, "Source not found")
+    return source
+
+
+@app.put("/classes/{class_id}/sources/{identifier}")
+def configure_source(class_id: int, identifier: str, body: SourceSettings,
+                     user=Depends(current_user), db=Depends(get_db)):
+    from .ingestion import public_source
+    source = scoped_source(db, user, class_id, identifier)
+    for key, value in body.model_dump().items():
+        setattr(source, key, value)
+    audit(db, user, class_id, "assessment_source_updated", {"source_id": identifier, **body.model_dump()})
+    db.commit()
+    return public_source(source)
+
+
+@app.post("/classes/{class_id}/sources/{identifier}/rotate-key")
+def rotate_source_key(class_id: int, identifier: str, user=Depends(current_user), db=Depends(get_db)):
+    source = scoped_source(db, user, class_id, identifier)
+    key = secrets.token_urlsafe(48)
+    source.ingestion_token_hash = token_hash(key)
+    audit(db, user, class_id, "source_key_rotated", {"source_id": identifier})
+    db.commit()
+    return {"ingestion_key": key}
+
+
+@app.post("/classes/{class_id}/sources/{identifier}/batches", status_code=202)
+def upload_source(class_id: int, identifier: str, body: Upload,
+                  user=Depends(current_user), db=Depends(get_db)):
+    from .ingestion import accept
+    source = scoped_source(db, user, class_id, identifier)
+    try:
+        batch = accept(db, source, body.csv)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        batch = accept(db, source, body.csv)
+    return {"batch_id": batch.id, "status": batch.status}
+
+
+@app.post("/ingestion/{identifier}", status_code=202)
+async def source_feed(identifier: str, request: Request, db=Depends(get_db)):
+    from .ingestion import authenticate_source, accept, MAX_BYTES
+    source = authenticate_source(db, identifier, request.headers.get("X-Ingestion-Key", ""))
+    content = bytearray()
+    async for chunk in request.stream():
+        content.extend(chunk)
+        if len(content) > MAX_BYTES:
+            raise HTTPException(413, "Maximum CSV size is 2 MB")
+    try:
+        decoded = content.decode("utf-8-sig")
+    except UnicodeError:
+        raise HTTPException(422, "Use UTF-8 CSV") from None
+    try:
+        batch = accept(db, source, decoded)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        batch = accept(db, source, decoded)
+    return {"batch_id": batch.id, "status": batch.status}
+
+
+@app.get("/classes/{class_id}/ingestion-batches")
+def get_batches(class_id: int, user=Depends(current_user), db=Depends(get_db)):
+    from .db import IngestionBatch, AssessmentSource
+    allowed_class(db, user, class_id)
+    return [{"id": b.id, "source_id": b.source_id, "filename": b.filename, "status": b.status,
+             "result": b.result, "created_at": b.created_at} for b in db.scalars(
+        select(IngestionBatch).join(AssessmentSource).where(AssessmentSource.class_id == class_id)
+        .order_by(IngestionBatch.created_at.desc()).limit(50))]
+
+
+@app.get("/classes/{class_id}/captures")
+def get_captures(class_id: int, user=Depends(current_user), db=Depends(get_db)):
+    from .db import CaptureEvent
+    allowed_class(db, user, class_id)
+    return [{"id": c.id, "created_at": c.created_at, "changed_records": c.changed_records,
+             "kind": c.kind, "evaluation_status": c.evaluation_status, "run_id": c.run_id,
+             "data_report": "delivered_to_staff_inboxes"} for c in db.scalars(
+        select(CaptureEvent).where(CaptureEvent.class_id == class_id)
+        .order_by(CaptureEvent.created_at.desc()).limit(50))]
+
+
+@app.get("/notifications")
+def get_notifications(user=Depends(current_user), db=Depends(get_db)):
+    from .db import ReportNotification, SchoolClass
+    from .notifications import public_notification
+    query = select(ReportNotification).join(SchoolClass).where(
+        ReportNotification.recipient_id == user.id, SchoolClass.school == user.school)
+    if user.role != "principal":
+        query = query.where(SchoolClass.teacher_id == user.id)
+    return [public_notification(db, n) for n in db.scalars(query.order_by(
+        ReportNotification.created_at.desc()).limit(100))]
+
+
+@app.post("/notifications/{identifier}/read")
+def read_notification(identifier: str, user=Depends(current_user), db=Depends(get_db)):
+    from .db import ReportNotification
+    item = db.get(ReportNotification, identifier)
+    if not item or item.recipient_id != user.id:
+        raise HTTPException(404, "Report not found")
+    allowed_class(db, user, item.class_id)
+    item.read_at = utcnow()
+    db.commit()
+    return {"read": identifier}
+
+
+@app.get("/notification-preferences")
+def email_preferences(user=Depends(current_user), db=Depends(get_db)):
+    from .db import NotificationPreference
+    from .notifications import smtp_ready, usable_email
+    preference = db.get(NotificationPreference, user.id)
+    return {"email_enabled": bool(preference and preference.email_enabled),
+            "registered_email": user.email, "usable_address": usable_email(user.email),
+            "smtp_configured": smtp_ready(), "in_app_delivery": "always_on"}
+
+
+def save_email_preference(db, user, target, enabled):
+    from .db import NotificationPreference
+    from .notifications import usable_email
+    if enabled and not usable_email(target.email):
+        raise HTTPException(422, "Email delivery needs a real registered staff address; sample addresses cannot receive mail.")
+    item = db.get(NotificationPreference, target.id)
+    if not item:
+        item = NotificationPreference(user_id=target.id)
+        db.add(item)
+    item.email_enabled = enabled
+    school_class = db.scalar(select(SchoolClass).where(SchoolClass.school == user.school).limit(1))
+    if school_class:
+        audit(db, user, school_class.id, "email_preference_updated", {"staff_id": target.id, "email_enabled": enabled})
+    db.commit()
+    return {"email_enabled": enabled}
+
+
+@app.put("/notification-preferences")
+def set_email_preference(body: EmailPreferenceBody, user=Depends(current_user), db=Depends(get_db)):
+    return save_email_preference(db, user, user, body.email_enabled)
+
+
+@app.put("/staff/{staff_id}/notification-preferences")
+def set_staff_email_preference(staff_id: int, body: EmailPreferenceBody,
+                              user=Depends(current_user), db=Depends(get_db)):
+    principal(user)
+    target = db.get(User, staff_id)
+    if not target or target.school != user.school:
+        raise HTTPException(404, "Staff not found")
+    return save_email_preference(db, user, target, body.email_enabled)

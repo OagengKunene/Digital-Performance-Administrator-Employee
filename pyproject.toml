@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "performance-administrator"
-version = "0.2.0"
+version = "0.3.0"
 description = "School performance administration and evidence-based agent workflows"
 requires-python = ">=3.12,<3.15"
 dependencies = [

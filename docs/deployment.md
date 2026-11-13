@@ -4,7 +4,7 @@ Validate in Codespaces first. No cloud resources or provider accounts are create
 
 ## Processes and storage
 
-The application has three processes: FastAPI (8000), Streamlit (8501), and the durable job/monitoring worker. `scripts/start.py` starts all three for Codespaces and local Compose, stopping the others if any process exits. PostgreSQL stores records, checkpoints, leases, follow-ups and policies. Container files and Codespaces volumes are not hosted backups.
+The application has three processes: FastAPI (8000), Streamlit (8501), and the durable capture, delivery and evaluation worker. `scripts/start.py` starts all three for Codespaces and local Compose, stopping the others if any process exits. PostgreSQL stores records, checkpoints, leases, follow-ups and policies. Container files and Codespaces volumes are not hosted backups.
 
 Run `python -m pae.manage init` as a controlled deployment step before starting the new version. This adds the new tables and preserves old users/marks/report history. Take a backup before real-school upgrades. Formal versioned production migrations are still a delivery requirement.
 
@@ -34,4 +34,8 @@ Graceful worker shutdown requeues unfinished work. After an abrupt kill, another
 
 ## Before a school rollout
 
-Complete account recovery, formal migrations, distributed usage controls, notification delivery, data retention, backup/restore, load tests and pilot evaluation. Paid/free provider allowances and managed database costs depend on the account and usage. Provider access and live end-to-end Groq quality require the user's account; mocked tests validate integration and recovery, not provider availability.
+Complete account recovery, formal migrations, distributed usage controls, live mail-server validation, data retention, backup/restore, load tests and pilot evaluation. Paid/free provider allowances and managed database costs depend on the account and usage. Provider access and live end-to-end Groq quality require the user's account; mocked tests validate integration and recovery, not provider availability.
+
+## Automatic sources and SMTP
+
+See [automatic capture](automatic-capture.md). Persist the worker's `INGESTION_INBOX_ROOT` for watched exports, or configure the school export system to use the authenticated source-feed endpoint. The source key is private and scoped to one class and record type. Ingestion and factual inbox delivery continue while model work is waiting. Supply SMTP credentials through private deployment secrets, verify real recipient addresses, and validate delivery with the school before using email operationally. In-app notifications need no SMTP setup. Source archives, capture snapshots and report deliveries require retention and backups.

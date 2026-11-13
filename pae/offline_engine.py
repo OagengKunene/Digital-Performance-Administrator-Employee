@@ -20,6 +20,7 @@ Self-correction demonstration
 """
 from datetime import date
 from .agents import SCHEMAS
+from .grounding import action_catalog
 from .providers import OFFLINE_MODEL
 
 
@@ -69,6 +70,11 @@ def performance_analyst(data, goal, outputs):
     if below:
         findings.append(f"{len(below)} learner(s) below the {data['support_threshold']:g}% support threshold: "
                         + ", ".join(l["learner_id"] for l in below[:8]) + ("…" if len(below) > 8 else "") + ".")
+    today = date.today().isoformat()
+    for item in sorted(_open_interventions(data), key=lambda i: i["due"])[:3]:
+        overdue = "OVERDUE, " if item["due"] < today else ""
+        findings.append(f"Open support #{item['id']} for {item['learner_id']} ({item['topic']}): "
+                        f"{overdue}due {item['due']}, status {item['status']}.")
     counts = data.get("attendance_recorded_status_counts") or {}
     if counts:
         findings.append("Recorded attendance statuses: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
@@ -77,24 +83,8 @@ def performance_analyst(data, goal, outputs):
 
 
 def intervention_planner(data, goal, outputs):
-    recs = []
-    covered = {i["learner_id"] for i in _open_interventions(data)}
-    for learner in _support_learners(data):
-        if learner["learner_id"] not in covered:
-            recs.append(f"Review support for {learner['learner_id']} ({_pct(learner['mean_percentage'])}); "
-                        "the class teacher should choose the activity, owner and follow-up date.")
-    weakest = _weakest(data, 1)
-    if weakest and weakest[0]["mean_percentage"] < data["support_threshold"]:
-        recs.append(f"Consider a whole-class reteach of {weakest[0]['topic']} ({_pct(weakest[0]['mean_percentage'])}).")
-    today = date.today().isoformat()
-    for item in sorted(_open_interventions(data), key=lambda i: i["due"]):
-        overdue = "OVERDUE, " if item["due"] < today else ""
-        recs.append(f"Follow up support #{item['id']} for {item['learner_id']} ({item['topic']}): "
-                    f"{overdue}due {item['due']}, status {item['status']}.")
-    unmarked = [l["learner_id"] for l in data.get("learners", []) if l["marked_count"] < l["expected_marks"]]
-    if unmarked:
-        recs.append("Check missing marks for: " + ", ".join(unmarked[:10]) + ("…" if len(unmarked) > 10 else "") + ".")
-    return {"recommendations": recs[:10]}
+    """Select from the approved action catalog only, verbatim (grounding rule)."""
+    return {"recommendations": action_catalog(data)[:10]}
 
 
 def reporting_agent(data, goal, outputs, demonstrate_repair=False):
@@ -125,7 +115,8 @@ def quality_reviewer(data, goal, outputs):
         issues.append("A recommendation is not backed by the intervention planner's evidence.")
     return {"approved": not issues, "issues": issues[:10],
             "checked_mean_percentage": data["mean_percentage"],
-            "checked_marked_count": data["marked_count"], "checked_missing_count": data["missing_count"]}
+            "checked_marked_count": data["marked_count"], "checked_missing_count": data["missing_count"],
+            "checked_assessment_count": data.get("assessment_count")}
 
 
 STAGES = {"coordinator": coordinator, "performance_analyst": performance_analyst,

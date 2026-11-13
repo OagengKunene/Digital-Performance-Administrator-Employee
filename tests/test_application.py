@@ -67,7 +67,8 @@ def test_attendance_unknown_is_not_absence(client, teacher):
 def test_mark_correction_has_before_after_audit(client, teacher):
     r = client.patch("/classes/1/marks/1", headers=teacher, json={"earned": 13, "reason": "Rechecked source script"})
     assert r.status_code == 200
-    log = client.get("/classes/1/audit", headers=teacher).json()[0]
+    log = next(row for row in client.get("/classes/1/audit", headers=teacher).json()
+               if row["action"] == "correct_mark")
     assert log["detail"]["before"] == 12 and log["detail"]["after"] == 13
 
 
