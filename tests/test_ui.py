@@ -28,6 +28,8 @@ def backend(client, monkeypatch):
 
         do_GET = handle_request
         do_POST = handle_request
+        do_PUT = handle_request
+        do_PATCH = handle_request
 
         def log_message(self, *args):
             pass
@@ -85,3 +87,22 @@ def test_wrong_password_shows_error_without_transport_exception(backend):
     assert page.error
     assert "token" not in page.session_state or not page.session_state["token"]
     assert backend == [("/auth/login", None)]
+
+
+def test_queue_returns_immediately_and_shows_saved_progress(backend, ai_config):
+    page = sign_in("teacher@example.test", "a-long-test-password")
+    page.sidebar.radio[0].set_value("Agent reports").run()
+    next(button for button in page.button if button.label == "Run agent team").click().run()
+    assert not page.exception
+    assert any("queued" in item.value.lower() for item in page.success)
+    assert any("queued" in item.label for item in page.expander)
+
+
+def test_principal_can_enable_non_ai_monitoring(backend):
+    page = sign_in("principal@example.test", "a-long-test-password")
+    page.sidebar.radio[0].set_value("Autonomous monitoring").run()
+    assert not page.exception
+    page.checkbox[0].check()
+    next(button for button in page.button if button.label == "Save monitoring policy").click().run()
+    assert not page.exception
+    assert page.success

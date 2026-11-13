@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "performance-administrator"
-version = "0.1.0"
+version = "0.2.0"
 description = "School performance administration and evidence-based agent workflows"
 requires-python = ">=3.12,<3.15"
 dependencies = [
   "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "SQLAlchemy>=2.0,<3",
   "psycopg[binary]>=3.2,<4", "pydantic-settings>=2.7,<3",
-  "httpx[socks]>=0.28,<1", "streamlit>=1.40,<2", "google-adk>=1.18,<3"
+  "httpx[socks]>=0.28,<1", "streamlit>=1.40,<2", "google-adk>=1.18,<3",
+  "litellm>=1.84,<2"
 ]
 
 [project.optional-dependencies]

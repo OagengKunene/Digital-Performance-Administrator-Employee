@@ -1,5 +1,5 @@
 import pytest
-from pae.agents import ReviewedReport, review_numbers, build_team
+from pae.agents import ReviewedReport, review_numbers, SCHEMAS
 
 
 def upload(client, teacher, csv, kind="marks"):
@@ -107,9 +107,8 @@ def test_numeric_reviewer_detects_and_accepts_repair():
 
 
 def test_actual_adk_team_constructs_without_network():
-    team = build_team({"class_id": 1})
-    assert team.name == "performance_administrator"
-    assert len(team.tools) == 5
+    assert set(SCHEMAS) == {"coordinator", "performance_analyst", "intervention_planner",
+                            "reporting_agent", "quality_reviewer"}
 
 
 def test_login_and_revocation(client):

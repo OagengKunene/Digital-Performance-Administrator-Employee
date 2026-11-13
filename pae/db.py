@@ -102,6 +102,63 @@ class AgentRun(Base):
     at: Mapped[str] = mapped_column(default=utcnow)
 
 
+class AgentJob(Base):
+    __tablename__ = "agent_jobs"
+    id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), primary_key=True)
+    status: Mapped[str] = mapped_column(default="queued", index=True)
+    provider: Mapped[str]
+    model: Mapped[str]
+    fallback: Mapped[str] = mapped_column(default="")
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    state: Mapped[dict] = mapped_column(JSON, default=dict)
+    dedupe_key: Mapped[str | None] = mapped_column(String(160), unique=True, nullable=True)
+    active_class_id: Mapped[int | None] = mapped_column(ForeignKey("classes.id"), unique=True, nullable=True)
+    next_at: Mapped[float] = mapped_column(default=0.0, index=True)
+    lease_owner: Mapped[str] = mapped_column(default="")
+    lease_until: Mapped[float] = mapped_column(default=0.0)
+    updated_at: Mapped[str] = mapped_column(default=utcnow)
+
+
+class MonitoringPolicy(Base):
+    __tablename__ = "monitoring_policies"
+    class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"), primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    enabled: Mapped[bool] = mapped_column(default=False)
+    use_ai: Mapped[bool] = mapped_column(default=False)
+    on_record_change: Mapped[bool] = mapped_column(default=True)
+    interval_minutes: Mapped[int] = mapped_column(default=1440)
+    daily_ai_limit: Mapped[int] = mapped_column(default=1)
+    next_at: Mapped[float] = mapped_column(default=0.0)
+    last_hash: Mapped[str] = mapped_column(default="")
+
+
+class FollowUp(Base):
+    __tablename__ = "monitor_followups"
+    __table_args__ = (UniqueConstraint("class_id", "issue_key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"))
+    issue_key: Mapped[str] = mapped_column(String(120))
+    assigned_to: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    status: Mapped[str] = mapped_column(default="open")
+    detail: Mapped[dict] = mapped_column(JSON)
+    outcome: Mapped[str] = mapped_column(default="")
+    due_at: Mapped[float]
+    escalated: Mapped[bool] = mapped_column(default=False)
+    updated_at: Mapped[str] = mapped_column(default=utcnow)
+
+
+class WorkerHeartbeat(Base):
+    __tablename__ = "worker_heartbeats"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    last_seen: Mapped[float]
+
+
+class AutomaticReportBudget(Base):
+    __tablename__ = "automatic_report_budgets"
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)
+    used: Mapped[int] = mapped_column(default=0)
+
+
 def make_engine(url):
     if url.startswith("sqlite"):
         Path(".local").mkdir(exist_ok=True)

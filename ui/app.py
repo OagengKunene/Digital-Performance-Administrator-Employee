@@ -17,14 +17,19 @@ def api(method, path, **kwargs):
     token = st.session_state.get("token")
     if token:
         headers["Authorization"] = "Bearer " + token
-    response = httpx.request(method, API + path, headers=headers, timeout=110, trust_env=use_proxy, **kwargs)
+    timeout = httpx.Timeout(30, connect=10)
+    try:
+        response = httpx.request(method, API + path, headers=headers, timeout=timeout, trust_env=use_proxy, **kwargs)
+    except httpx.TransportError:
+        st.error("The application server is unavailable. Keep scripts/start.py running and refresh this page.")
+        st.stop()
     if response.status_code >= 400:
         if response.status_code == 401:
             st.session_state.pop("token", None)
         try:
             detail = response.json().get("detail", "Request failed")
-        except ValueError:  # proxy or crash pages are HTML/plain text, not JSON
-            detail = f"Server error {response.status_code}. Check the terminal running scripts/start.py."
+        except ValueError:
+            detail = f"Application request failed (HTTP {response.status_code}). Check the API terminal."
         st.error(str(detail))
         st.stop()
     return response.json()
@@ -74,7 +79,7 @@ try:
     selected = st.sidebar.selectbox("Class", classes, format_func=lambda c: c["name"] + " · " + c["subject"])
     cid = selected["id"]
     data = api("GET", f"/classes/{cid}/evidence")
-    view = st.sidebar.radio("Workspace", ["Overview", "Import records", "Learner support", "Agent reports", "Audit history"])
+    view = st.sidebar.radio("Workspace", ["Overview", "Import records", "Learner support", "Agent reports", "Autonomous monitoring", "Audit history"])
     if view == "Overview":
         st.subheader(selected["name"] + " · " + selected["subject"])
         cols = st.columns(3)
@@ -135,18 +140,102 @@ try:
                     api("PATCH", f"/classes/{cid}/interventions/{item['id']}", json={"status": status, "follow_up": follow})
                     st.rerun()
     elif view == "Agent reports":
-        st.subheader("Live ADK workflow")
-        st.caption("Requires GOOGLE_API_KEY. Verified metrics do not imply that every recommendation is educationally validated; staff review remains necessary.")
+        st.subheader("Digital employee reports")
+        runtime = api("GET", "/agent-runtime")
+        st.caption("The coordinator plans work and delegates to ADK specialists. Completed stages are saved. Numerical verification does not certify every narrative claim; staff review remains necessary.")
+        st.write("Selected provider:", runtime["provider"], "· Model:", runtime["model"])
+        if not runtime["configured"]:
+            st.warning("Add the selected provider's API key through Codespaces secrets, then restart the Codespace.")
+        if runtime["worker_last_seen"] is None:
+            st.info("No worker heartbeat yet. Start all services with python scripts/start.py.")
         goal = st.text_area("Task", value="Review this class's performance and prepare a teacher report with evidence-based support recommendations.")
-        if st.button("Run agent team"):
-            with st.spinner("Agents are analysing, drafting and reviewing..."):
-                result = api("POST", f"/classes/{cid}/runs", json={"goal": goal})
-            st.json(result)
-        for run in api("GET", f"/classes/{cid}/runs"):
-            with st.expander(run["at"] + " · " + run["status"]):
-                st.json(run["result"])
-                st.dataframe(run["events"], hide_index=True)
-                st.download_button("Download run", json.dumps(run, indent=2), file_name=run["id"] + ".json", key=run["id"])
+        if st.button("Run agent team", disabled=not runtime["configured"]):
+            queued = api("POST", f"/classes/{cid}/runs", json={"goal": goal})
+            st.success("Report queued. You can leave this page; the worker saves progress.")
+        st.download_button("Download statistical report (no AI interpretation)",
+            json.dumps(api("GET", f"/classes/{cid}/statistics"), indent=2),
+            file_name=f"class-{cid}-statistics.json", mime="application/json")
+
+        @st.fragment(run_every=3)
+        def show_runs():
+            runs = api("GET", f"/classes/{cid}/runs")
+            if not runs:
+                st.info("No reports yet.")
+            for run in runs:
+                progress = run.get("progress", {})
+                active = run["status"] in {"queued", "running", "retrying"}
+                with st.expander(run["at"] + " · " + run["status"], expanded=active):
+                    st.write("Status:", run["status"])
+                    if progress:
+                        st.write("Current stage:", progress["active_stage"] or "finished")
+                        st.write("Saved stages:", ", ".join(progress["completed_stages"]) or "none")
+                        st.write("Dispatched attempts:", progress["request_attempts"], "/", progress["request_budget"])
+                        if run["status"] == "retrying":
+                            st.info("Only the failed stage is waiting for its next attempt.")
+                    st.json(run["result"])
+                    if progress.get("completed_outputs"):
+                        with st.expander("Saved intermediate work — drafts for staff review"):
+                            st.json(progress["completed_outputs"])
+                    if progress.get("resumable"):
+                        choices = [name for name, available in runtime["available_providers"].items() if available]
+                        if choices:
+                            provider = st.selectbox("Provider for unfinished stage", choices,
+                                key="resume-provider-" + run["id"])
+                            if st.button("Resume from saved progress", key="resume-" + run["id"]):
+                                api("POST", f"/classes/{cid}/runs/{run['id']}/resume", json={"provider": provider})
+                                st.rerun()
+                    if active and st.button("Cancel further processing", key="cancel-" + run["id"]):
+                        api("POST", f"/classes/{cid}/runs/{run['id']}/cancel")
+                        st.rerun()
+                    if run["events"]:
+                        with st.expander("Activity"):
+                            st.dataframe(run["events"], hide_index=True)
+                    st.download_button("Download run", json.dumps(run, indent=2),
+                        file_name=run["id"] + ".json", key=run["id"])
+        show_runs()
+    elif view == "Autonomous monitoring":
+        st.subheader("Autonomous monitoring and follow-up")
+        st.caption("While the worker is running, enabled policies check records on schedule and after configured record changes. Follow-ups are assigned in this application; no email or SMS delivery is implied.")
+        policy = api("GET", f"/classes/{cid}/monitoring")
+        if st.session_state.get("role") == "principal":
+            with st.form("monitor-policy"):
+                enabled = st.checkbox("Enable autonomous record monitoring", value=policy["enabled"])
+                use_ai = st.checkbox("Automatically initiate AI investigations when evidence changes", value=policy["use_ai"])
+                on_change = st.checkbox("Check after record changes", value=policy["on_record_change"])
+                minutes = st.number_input("Scheduled check interval (minutes)", min_value=15, max_value=10080, value=policy["interval_minutes"])
+                daily = st.number_input("Maximum automatic AI reports for this class per UTC day", min_value=1, max_value=5, value=policy["daily_ai_limit"])
+                st.caption("Record checks and in-app follow-ups work without a model key. Automatic AI reports consume provider allowance and also obey the installation-wide daily cap.")
+                if st.form_submit_button("Save monitoring policy"):
+                    api("PUT", f"/classes/{cid}/monitoring", json={"enabled": enabled,
+                        "use_ai": use_ai, "on_record_change": on_change,
+                        "interval_minutes": minutes, "daily_ai_limit": daily})
+                    st.success("Monitoring policy saved. The worker will apply it.")
+        else:
+            st.write("Monitoring enabled:", policy["enabled"])
+            st.write("Automatic AI investigations:", policy["use_ai"])
+
+        @st.fragment(run_every=5)
+        def show_followups():
+            items = api("GET", f"/classes/{cid}/follow-ups")
+            st.subheader("Assigned follow-ups")
+            if not items:
+                st.info("No follow-ups recorded. Enabled monitoring creates them when evidence needs attention.")
+            for item in items:
+                label = item["issue_key"] + " · " + item["status"]
+                if item["escalated_to_principal"]:
+                    label += " · escalated to principal"
+                with st.expander(label):
+                    st.json(item["detail"])
+                    if item["outcome"]:
+                        st.write(item["outcome"])
+                    with st.form("follow-up-" + str(item["id"])):
+                        status = st.selectbox("Outcome status", ["acknowledged", "resolved"])
+                        outcome = st.text_area("Action taken or resolution evidence (at least 10 characters)")
+                        if st.form_submit_button("Save outcome"):
+                            api("PATCH", f"/classes/{cid}/follow-ups/{item['id']}",
+                                json={"status": status, "outcome": outcome})
+                            st.rerun()
+        show_followups()
     else:
         st.dataframe(api("GET", f"/classes/{cid}/audit"), hide_index=True)
 except (httpx.ConnectError, httpx.TimeoutException):

@@ -9,7 +9,15 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://pae:pae_local_only@db:5432/pae
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      AI_FALLBACK_PROVIDER: ${AI_FALLBACK_PROVIDER:-}
+      AI_REQUESTS_PER_MINUTE: ${AI_REQUESTS_PER_MINUTE:-4}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-300}
+      AI_MAX_MODEL_CALLS: ${AI_MAX_MODEL_CALLS:-10}
+      AUTONOMOUS_DAILY_REPORT_LIMIT: ${AUTONOMOUS_DAILY_REPORT_LIMIT:-1}
     depends_on:
       db:
         condition: service_healthy
