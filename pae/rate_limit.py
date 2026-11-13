@@ -30,11 +30,11 @@ _pacers = {}
 _lock = threading.Lock()
 
 
-def model_pacer(model, rpm):
+def model_pacer(model, rpm, *, initial_delay=60):
     with _lock:
         key = (model, rpm)
         if key not in _pacers:
-            _pacers[key] = RequestPacer(rpm)
+            _pacers[key] = RequestPacer(rpm, initial_delay=initial_delay)
         return _pacers[key]
 
 

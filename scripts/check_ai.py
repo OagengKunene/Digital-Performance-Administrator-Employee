@@ -1,56 +1,53 @@
-"""Check ADK construction and make one tiny Gemini request, without school data."""
+"""One short provider request without school records or printed credentials."""
+import argparse
 import json
-import os
 import sys
-
+import httpx
 from pae.ai_diagnostics import describe_ai_error
-from pae.config import settings
+from pae.providers import provider_details
 
 
-def main():
-    config = settings()
-    print("GOOGLE_API_KEY: " + ("loaded" if config.google_api_key else "missing"))
-    print("Configured model: " + config.gemini_model.replace(config.google_api_key, "<redacted>")
-          if config.google_api_key else "Configured model: " + config.gemini_model)
-    if not config.google_api_key:
-        print("Add GOOGLE_API_KEY to Codespaces secrets, grant this repository access, then stop and restart the Codespace.")
+def main(provider=None):
+    provider, model, key = provider_details(provider)
+    print("Provider: " + provider)
+    print("API key: " + ("loaded" if key else "missing"))
+    print("Configured model: " + model.replace(key, "<redacted>") if key else "Configured model: " + model)
+    if not key:
+        print("Add GROQ_API_KEY or GOOGLE_API_KEY in Codespaces secrets, grant repository access, then restart the Codespace.")
         return 1
-    if config.google_api_key != config.google_api_key.strip():
-        print("The API key contains surrounding whitespace. Correct the saved secret and restart the Codespace.")
+    if key != key.strip():
+        print("The saved key contains surrounding whitespace. Correct the secret and restart.")
         return 1
-    if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in {"true", "1"}:
-        print("GOOGLE_GENAI_USE_VERTEXAI is enabled, but this setup expects the Gemini Developer API. Remove that setting and restart before testing.")
-        return 1
+    print("Sending one short request without school records.")
     try:
-        from pae.agents import build_team
-        build_team({"mean_percentage": 75.0, "marked_count": 3, "missing_count": 1})
-        print("ADK team construction: OK")
-    except Exception as error:
-        print("ADK team construction: FAILED")
-        print(json.dumps(describe_ai_error(error), indent=2))
-        return 1
-
-    print("Testing Gemini with one short request; no school records are sent.")
-    try:
-        from google import genai
-        from google.genai import types
-        with genai.Client(api_key=config.google_api_key, vertexai=False,
-                          http_options=types.HttpOptions(timeout=20000,
-                              retry_options=types.HttpRetryOptions(attempts=1))) as client:
-            response = client.models.generate_content(
-                model=config.gemini_model, contents="Reply with the single word OK.",
-            )
-        if not response.candidates:
-            print("Gemini returned no candidates; retry the check or inspect provider restrictions.")
-            return 1
-        print("Gemini generation: OK")
-        print("Provider access works. Retry Agent reports; if it fails, share the new error_code and error_type.")
+        if provider == "groq":
+            payload = {"model": model, "messages": [{"role": "user", "content": "Reply with OK."}],
+                       "max_completion_tokens": 128}
+            if model.startswith("openai/gpt-oss"):
+                payload["reasoning_effort"] = "low"
+            response = httpx.post("https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": "Bearer " + key}, json=payload, timeout=30)
+            response.raise_for_status()
+            if not response.json().get("choices"):
+                raise ValueError()
+        else:
+            from google import genai
+            from google.genai import types
+            with genai.Client(api_key=key, vertexai=False, http_options=types.HttpOptions(
+                    timeout=20000, retry_options=types.HttpRetryOptions(attempts=1))) as client:
+                result = client.models.generate_content(model=model, contents="Reply with OK.")
+            if not result.candidates:
+                raise ValueError()
+        print("Provider generation: OK")
+        print("This validates provider access, not the complete autonomous workflow.")
         return 0
     except Exception as error:
-        print("Gemini generation: FAILED")
+        print("Provider generation: FAILED")
         print(json.dumps(describe_ai_error(error), indent=2))
         return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--provider", choices=["gemini", "groq"])
+    sys.exit(main(parser.parse_args().provider))

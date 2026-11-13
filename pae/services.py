@@ -4,9 +4,9 @@ import math
 from datetime import date
 from collections import Counter, defaultdict
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
-from .db import SchoolClass, Learner, Mark, Attendance, Audit, Intervention
+from .db import SchoolClass, Learner, Mark, Attendance, Audit, Intervention, MonitoringPolicy
 
 
 def allowed_class(db, user, class_id):
@@ -18,6 +18,11 @@ def allowed_class(db, user, class_id):
 
 def audit(db, user, class_id, action, detail):
     db.add(Audit(user_id=user.id, class_id=class_id, action=action, detail=detail))
+
+
+def wake_monitor(db, class_id):
+    db.execute(update(MonitoringPolicy).where(MonitoringPolicy.class_id == class_id,
+        MonitoringPolicy.enabled.is_(True), MonitoringPolicy.on_record_change.is_(True)).values(next_at=0))
 
 
 def import_csv(db, user, class_id, content, kind):
@@ -70,6 +75,7 @@ def import_csv(db, user, class_id, content, kind):
         raise HTTPException(422, str(e)) from e
     db.add_all(staged)
     audit(db, user, class_id, f"import_{kind}", {"rows": len(staged)})
+    wake_monitor(db, class_id)
     try:
         db.commit()
     except IntegrityError as error:

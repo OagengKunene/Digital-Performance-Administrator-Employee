@@ -3,7 +3,7 @@ import os
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from fastapi.testclient import TestClient
 from pae.db import Base, get_db, User, SchoolClass, Learner, Mark, LoginSession
 from pae.api import app, attempts
@@ -55,3 +55,23 @@ def teacher():
 @pytest.fixture
 def principal():
     return {"Authorization": "Bearer principal-token"}
+
+
+@pytest.fixture
+def db_factory(client):
+    generator = app.dependency_overrides[get_db]()
+    session = next(generator)
+    engine = session.bind
+    generator.close()
+    return sessionmaker(engine, expire_on_commit=False)
+
+
+@pytest.fixture
+def ai_config(monkeypatch):
+    from pae.config import settings
+    config = settings()
+    for name, value in {"ai_provider": "gemini", "google_api_key": "test-key-not-real",
+        "groq_api_key": "", "ai_fallback_provider": "", "ai_max_model_calls": 10,
+        "ai_retry_delay_seconds": 1, "autonomous_daily_report_limit": 1}.items():
+        monkeypatch.setattr(config, name, value)
+    return config

@@ -34,3 +34,5 @@ jobs:
         run: docker build -t pae:ci .
       - name: Container bootstrap smoke test
         run: docker run --rm pae:ci python -m pae.manage bootstrap --sample
+      - name: Container worker and autonomous monitoring smoke test
+        run: docker run --rm pae:ci python scripts/smoke.py

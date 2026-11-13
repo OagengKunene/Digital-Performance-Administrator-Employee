@@ -1,24 +1,37 @@
 # Deployment plan
 
-Start and validate the repository in Codespaces first. No cloud resources are created automatically.
+Validate in Codespaces first. No cloud resources or provider accounts are created by this repository.
 
-The Docker image contains both the API (8000) and Streamlit (8501). Local Compose binds ports only to localhost and supplies PostgreSQL on an internal network. The database password in Compose is exclusively a local-development setting; a hosted database needs its own managed credentials.
+## Processes and storage
 
-For a hosted system, use separate Cloud Run services from this image:
+The application has three processes: FastAPI (8000), Streamlit (8501), and the durable job/monitoring worker. `scripts/start.py` starts all three for Codespaces and local Compose, stopping the others if any process exits. PostgreSQL stores records, checkpoints, leases, follow-ups and policies. Container files and Codespaces volumes are not hosted backups.
 
-- API: override command with `python -m uvicorn pae.api:app --host 0.0.0.0 --port 8080`.
-- UI: override command with `python -m streamlit run ui/app.py --server.address 0.0.0.0 --server.port 8080 --browser.gatherUsageStats false`.
+Run `python -m pae.manage init` as a controlled deployment step before starting the new version. This adds the new tables and preserves old users/marks/report history. Take a backup before real-school upgrades. Formal versioned production migrations are still a delivery requirement.
 
-Set the same `AI_TIMEOUT_SECONDS` on both services (default 300 seconds) and configure the hosting platform and any intermediary request deadlines to exceed the workflow limit plus the UI's 30-second response allowance. The synchronous workflow remains temporary until durable jobs and polling are implemented.
+Use provider secrets for `GOOGLE_API_KEY` or `GROQ_API_KEY`. Select `AI_PROVIDER` explicitly. `AI_FALLBACK_PROVIDER` is empty by default; setting it authorises the configured second provider for a failed stage and requires that provider's secret.
 
-Set the UI's `PAE_API_URL` to the backend HTTPS URL. The backend enforces application session authentication and class permissions on all school-data routes. Configure platform ingress/IAM deliberately: an IAM-private backend additionally requires authenticated service-to-service requests, which the current UI client does not yet implement. Do not assume deploying the image establishes that connection.
+## Google Cloud hosting shape
 
-Supply `DATABASE_URL` and `GOOGLE_API_KEY` through managed secrets. Use persistent PostgreSQL instead of the SQLite fallback. Initialise the database in a controlled one-off job (`python -m pae.manage init`), then provision the first principal via the documented management command. Do not seed fictional accounts in the real school environment. Do not use local container files as durable hosted storage.
+Use separate services from the image:
 
-Before a school rollout, complete the remaining migrations, durable jobs, backup/restore, account recovery, ingress/TLS review, retention and load tests listed in architecture.md. The cloud deployment and live Gemini calls require the user's accounts and have not been verified by the offline test suite. Free allowances depend on usage and account eligibility; managed PostgreSQL is a separate cost/provider decision.
+- API command: `python -m uvicorn pae.api:app --host 0.0.0.0 --port 8080`.
+- UI command: `python -m streamlit run ui/app.py --server.address 0.0.0.0 --server.port 8080 --browser.gatherUsageStats false`.
+- Worker command: `python -m pae.worker`.
 
-The current AI pacing gate is local to one API process. Keep a single API worker
-and replica for evaluation. Before scaling, introduce a shared limiter and daily
-usage controls that account for every worker using the provider project. Lower
-`AI_REQUESTS_PER_MINUTE` to match the project's actual allowance; it does not
-increase provider quotas or coordinate other applications using the project.
+The worker needs an always-running execution environment with CPU available between requests, or a separately designed scheduled job runner. A request-scaled web service that becomes idle will not run continuous monitoring reliably. A Cloud Run configuration requires deliberate worker CPU/instance settings; these are not provisioned or verified here. Do not present a Codespace as 24/7 deployment.
+
+Set the UI's `PAE_API_URL` to the API HTTPS URL. School-data routes enforce application authentication and class scope. An IAM-private API additionally needs authenticated service-to-service requests, which the current UI client does not implement. Configure ingress/IAM and TLS before exposing school records.
+
+Supply an externally persistent PostgreSQL database and managed credentials. Local development Compose database credentials are not suitable for hosting. Initialise the first real principal with the management command and use a separate database from fictional sample records.
+
+## Worker and provider limits
+
+SQL jobs use atomic claims, owner-fenced writes and a unique active-class slot. Nevertheless, the provider request pacer is local to one worker. Keep one worker until a shared provider RPM/TPM/daily ledger is implemented. Multiple worker replicas can collectively exceed provider limits even when SQL claims are safe.
+
+Tune `AI_REQUESTS_PER_MINUTE`, `AI_TIMEOUT_SECONDS` (per stage), `AI_MAX_MODEL_CALLS` (whole-report dispatch budget), and the automatic-initiation caps for actual account limits. The API returns queued jobs immediately; the UI polls short requests, so an API request no longer waits for a multi-minute model workflow.
+
+Graceful worker shutdown requeues unfinished work. After an abrupt kill, another worker recovers when the lease expires. A request may be repeated if its provider reply was lost before checkpointing. Backups must include job and policy tables as well as school records.
+
+## Before a school rollout
+
+Complete account recovery, formal migrations, distributed usage controls, notification delivery, data retention, backup/restore, load tests and pilot evaluation. Paid/free provider allowances and managed database costs depend on the account and usage. Provider access and live end-to-end Groq quality require the user's account; mocked tests validate integration and recovery, not provider availability.

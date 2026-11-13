@@ -6,12 +6,13 @@ from datetime import date
 from typing import Literal
 from fastapi import FastAPI, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import select, text
-from .db import get_db, User, LoginSession, SchoolClass, Learner, Mark, Intervention, Audit, AgentRun
+from sqlalchemy import select, text, func
+from sqlalchemy.exc import IntegrityError
+from .db import get_db, User, LoginSession, SchoolClass, Learner, Mark, Intervention, Audit, AgentRun, AgentJob, MonitoringPolicy, FollowUp as MonitorFollowUp, WorkerHeartbeat, utcnow
 from .security import current_user, verify_password, hash_password, token_hash
-from .services import allowed_class, audit, evidence, import_csv
+from .services import allowed_class, audit, evidence, import_csv, wake_monitor
 
-app = FastAPI(title="Performance Administrator", version="0.1.0")
+app = FastAPI(title="Performance Administrator", version="0.2.0")
 attempts = defaultdict(deque)
 
 
@@ -47,6 +48,23 @@ class FollowUp(StrictBody):
 
 class Goal(StrictBody):
     goal: str = Field(min_length=10, max_length=2000)
+
+
+class ResumeRun(StrictBody):
+    provider: Literal["gemini", "groq"] | None = None
+
+
+class PolicyBody(StrictBody):
+    enabled: bool = False
+    use_ai: bool = False
+    on_record_change: bool = True
+    interval_minutes: int = Field(default=1440, ge=15, le=10080)
+    daily_ai_limit: int = Field(default=1, ge=1, le=5)
+
+
+class FollowUpOutcome(StrictBody):
+    status: Literal["acknowledged", "resolved"]
+    outcome: str = Field(min_length=10, max_length=2000)
 
 
 class NewStaff(Login):
@@ -120,13 +138,14 @@ def import_roster(class_id: int, body: Upload, user=Depends(current_user), db=De
         raise HTTPException(422, "Roster is empty")
     db.add_all(rows)
     audit(db, user, class_id, "import_roster", {"rows": len(rows)})
+    wake_monitor(db, class_id)
     db.commit()
     return {"inserted": len(rows)}
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": "0.2.0"}
 
 
 @app.get("/ready")
@@ -198,6 +217,7 @@ def correct(class_id: int, mark_id: int, body: Correction, user=Depends(current_
         raise HTTPException(422, "Mark outside range")
     audit(db, user, class_id, "correct_mark", {"mark_id": mark_id, "before": mark.earned, "after": body.earned, "reason": body.reason})
     mark.earned = body.earned
+    wake_monitor(db, class_id)
     db.commit()
     return {"corrected": mark_id}
 
@@ -217,6 +237,7 @@ def create_support(class_id: int, body: Support, user=Depends(current_user), db=
     item = Intervention(class_id=class_id, learner_id=body.learner_id, topic=body.topic, activity=body.activity, due=body.due.isoformat())
     db.add(item)
     audit(db, user, class_id, "assign_support", body.model_dump(mode="json"))
+    wake_monitor(db, class_id)
     db.commit()
     return {"id": item.id}
 
@@ -231,6 +252,7 @@ def update_support(class_id: int, item_id: int, body: FollowUp, user=Depends(cur
         raise HTTPException(422, "Record completion evidence or follow-up before closing")
     item.status, item.follow_up = body.status, body.follow_up
     audit(db, user, class_id, "update_support", {"id": item_id, **body.model_dump()})
+    wake_monitor(db, class_id)
     db.commit()
     return {"updated": item_id}
 
@@ -240,23 +262,160 @@ def get_audit(class_id: int, user=Depends(current_user), db=Depends(get_db)):
     allowed_class(db, user, class_id)
     return [{"at": a.at, "action": a.action, "user_id": a.user_id, "detail": a.detail} for a in db.scalars(select(Audit).where(Audit.class_id == class_id).order_by(Audit.id.desc()).limit(200))]
 
+@app.get("/agent-runtime")
+def agent_runtime(user=Depends(current_user), db=Depends(get_db)):
+    from .providers import provider_details, configured
+    from .config import settings
+    config = settings()
+    return {"provider": config.ai_provider, "model": provider_details()[1],
+            "configured": configured(), "fallback_provider": config.ai_fallback_provider,
+            "available_providers": {name: configured(name) for name in ["gemini", "groq"]},
+            "worker_last_seen": db.scalar(select(func.max(WorkerHeartbeat.last_seen))),
+            "autonomous_daily_report_limit": config.autonomous_daily_report_limit}
+
+
+@app.get("/classes/{class_id}/statistics")
+def statistics(class_id: int, user=Depends(current_user), db=Depends(get_db)):
+    from .jobs import baseline_report
+    return baseline_report(evidence(db, user, class_id))
+
 
 @app.get("/classes/{class_id}/runs")
 def get_runs(class_id: int, user=Depends(current_user), db=Depends(get_db)):
+    from .jobs import public_run
     allowed_class(db, user, class_id)
-    return [{"id": r.id, "at": r.at, "status": r.status, "goal": r.goal, "result": r.result, "events": r.events} for r in db.scalars(select(AgentRun).where(AgentRun.class_id == class_id).order_by(AgentRun.at.desc()).limit(20))]
+    return [public_run(db, run) for run in db.scalars(select(AgentRun).where(
+        AgentRun.class_id == class_id).order_by(AgentRun.at.desc()).limit(20))]
 
 
-@app.post("/classes/{class_id}/runs")
-async def run_agents(class_id: int, body: Goal, user=Depends(current_user), db=Depends(get_db)):
-    from .agents import run_reviewed_report
-    from .config import settings
-    data = evidence(db, user, class_id)
-    if not settings().google_api_key:
-        raise HTTPException(503, "Add GOOGLE_API_KEY to Codespaces Secrets and restart the service to enable live agents.")
-    run_id = str(uuid.uuid4())
-    result = await run_reviewed_report(data, body.goal, run_id)
-    db.add(AgentRun(id=run_id, class_id=class_id, user_id=user.id, goal=body.goal, **result))
-    audit(db, user, class_id, "agent_run", {"run_id": run_id, "status": result["status"]})
+def scoped_run(db, user, class_id, identifier):
+    allowed_class(db, user, class_id)
+    run = db.get(AgentRun, identifier)
+    if not run or run.class_id != class_id:
+        raise HTTPException(404, "Run not found")
+    return run
+
+
+@app.get("/classes/{class_id}/runs/{identifier}")
+def get_run(class_id: int, identifier: str, user=Depends(current_user), db=Depends(get_db)):
+    from .jobs import public_run
+    return public_run(db, scoped_run(db, user, class_id, identifier))
+
+
+@app.post("/classes/{class_id}/runs", status_code=202)
+def run_agents(class_id: int, body: Goal, user=Depends(current_user), db=Depends(get_db)):
+    from .providers import configured
+    from .jobs import enqueue, public_run
+    allowed_class(db, user, class_id)
+    if not configured():
+        raise HTTPException(503, "Configure the selected provider's API key in Codespaces secrets and restart.")
+    active = db.scalar(select(AgentRun.id).join(AgentJob).where(
+        AgentRun.class_id == class_id, AgentJob.status.in_(["queued", "running", "retrying"])))
+    if active:
+        raise HTTPException(409, "A report is already active for this class. Open its saved progress.")
+    try:
+        run = enqueue(db, user, class_id, body.goal)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "A report became active for this class. Refresh its progress.") from None
+    return public_run(db, run)
+
+
+@app.post("/classes/{class_id}/runs/{identifier}/resume", status_code=202)
+def resume_run(class_id: int, identifier: str, body: ResumeRun,
+               user=Depends(current_user), db=Depends(get_db)):
+    from .jobs import resume, public_run
+    from .providers import configured
+    run = scoped_run(db, user, class_id, identifier)
+    job = db.get(AgentJob, run.id)
+    if not job:
+        raise HTTPException(409, "This historical run has no stage checkpoints; start a new report.")
+    provider = body.provider or job.provider
+    if not configured(provider):
+        raise HTTPException(503, "Configure the selected provider's API key before resuming.")
+    active = db.scalar(select(AgentRun.id).join(AgentJob).where(
+        AgentRun.class_id == class_id, AgentRun.id != run.id,
+        AgentJob.status.in_(["queued", "running", "retrying"])))
+    if active:
+        raise HTTPException(409, "Another report is already active for this class.")
+    try:
+        resume(db, run, provider)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from None
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Another report became active for this class.") from None
+    audit(db, user, class_id, "agent_job_resumed", {"run_id": run.id, "provider": provider})
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Another report became active for this class.") from None
+    return public_run(db, run)
+
+
+@app.post("/classes/{class_id}/runs/{identifier}/cancel")
+def cancel_run(class_id: int, identifier: str, user=Depends(current_user), db=Depends(get_db)):
+    from .jobs import public_run
+    run = scoped_run(db, user, class_id, identifier)
+    job = db.get(AgentJob, run.id)
+    if not job or job.status not in {"queued", "running", "retrying"}:
+        raise HTTPException(409, "This run is not active")
+    job.status, job.lease_owner, job.lease_until = "cancelled", "", 0
+    job.active_class_id = None
+    run.status = "cancelled"
+    run.result = {"message": "Further processing cancelled. Completed stages remain saved."}
+    audit(db, user, class_id, "agent_job_cancelled", {"run_id": run.id})
     db.commit()
-    return {"id": run_id, **result}
+    return public_run(db, run)
+
+
+@app.get("/classes/{class_id}/monitoring")
+def get_monitoring(class_id: int, user=Depends(current_user), db=Depends(get_db)):
+    allowed_class(db, user, class_id)
+    policy = db.get(MonitoringPolicy, class_id)
+    if not policy:
+        return PolicyBody().model_dump()
+    return {name: getattr(policy, name) for name in PolicyBody.model_fields}
+
+
+@app.put("/classes/{class_id}/monitoring")
+def set_monitoring(class_id: int, body: PolicyBody, user=Depends(current_user), db=Depends(get_db)):
+    from .providers import configured
+    principal(user)
+    allowed_class(db, user, class_id)
+    if body.enabled and body.use_ai and not configured():
+        raise HTTPException(503, "Configure an AI provider before enabling automatic AI reports.")
+    policy = db.get(MonitoringPolicy, class_id)
+    if not policy:
+        policy = MonitoringPolicy(class_id=class_id, owner_id=user.id)
+        db.add(policy)
+    for name, value in body.model_dump().items():
+        setattr(policy, name, value)
+    policy.owner_id, policy.next_at, policy.last_hash = user.id, 0, ""
+    audit(db, user, class_id, "monitoring_policy_updated", body.model_dump())
+    db.commit()
+    return body.model_dump()
+
+
+@app.get("/classes/{class_id}/follow-ups")
+def follow_ups(class_id: int, user=Depends(current_user), db=Depends(get_db)):
+    allowed_class(db, user, class_id)
+    return [{"id": item.id, "issue_key": item.issue_key, "status": item.status,
+             "detail": item.detail, "outcome": item.outcome, "assigned_to": item.assigned_to,
+             "due_at": item.due_at, "escalated_to_principal": item.escalated}
+            for item in db.scalars(select(MonitorFollowUp).where(MonitorFollowUp.class_id == class_id))]
+
+
+@app.patch("/classes/{class_id}/follow-ups/{identifier}")
+def update_follow_up(class_id: int, identifier: int, body: FollowUpOutcome,
+                     user=Depends(current_user), db=Depends(get_db)):
+    allowed_class(db, user, class_id)
+    item = db.get(MonitorFollowUp, identifier)
+    if not item or item.class_id != class_id:
+        raise HTTPException(404, "Follow-up not found")
+    item.status, item.outcome, item.updated_at = body.status, body.outcome, utcnow()
+    audit(db, user, class_id, "monitor_follow_up_updated", {"id": identifier, **body.model_dump()})
+    db.commit()
+    return {"updated": identifier}

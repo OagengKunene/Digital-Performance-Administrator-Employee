@@ -4,7 +4,6 @@ import logging
 import pytest
 from google.genai.errors import ClientError, ServerError
 from pae.ai_diagnostics import describe_ai_error
-from pae.agents import run_reviewed_report
 
 
 @pytest.mark.parametrize("code,category", [
@@ -36,15 +35,10 @@ def test_unknown_error_does_not_expose_its_message():
     assert "secret API key" not in json.dumps(detail)
 
 
-def test_workflow_failure_returns_and_logs_safe_diagnostics(monkeypatch, caplog):
-    def fail(_, **kwargs):
-        raise ValueError("secret-key-and-private-prompt")
-    monkeypatch.setattr("pae.agents.build_team", fail)
-    with caplog.at_level(logging.ERROR, logger="pae.agents"):
-        result = asyncio.run(run_reviewed_report(
-            {"mean_percentage": 75.0, "marked_count": 3, "missing_count": 1},
-            "Private school request", "diagnostic-test-run"))
-    assert result["status"] == "failed"
-    assert result["result"]["error_type"] == "ValueError"
-    assert "diagnostic-test-run" in caplog.text
-    assert "secret-key-and-private-prompt" not in caplog.text + json.dumps(result)
+def test_openai_compatible_status_codes_are_safe():
+    class ProviderError(Exception):
+        status_code = 429
+    detail = describe_ai_error(ProviderError("private provider body"))
+    assert detail["provider_code"] == 429
+    assert detail["error_code"] == "provider_quota"
+    assert "private" not in json.dumps(detail)
