@@ -43,14 +43,36 @@ Core administration works without an AI key. Live agent reports require one.
 
 Set `GEMINI_MODEL` to a model your account can access. The default is `gemini-3.6-flash`. A successful short generation test does not guarantee that every multi-agent run will finish within its deadline. Provider quotas still apply. Missing credentials never trigger fabricated agent output. Failed, unresolved and metric-verified runs are distinct statuses.
 
-Report runs have a default 300-second wall-clock limit and up to 24 model calls
-per invocation, with at most two repair invocations. The dashboard waits an extra
+Report runs have a default 300-second wall-clock limit and a shared budget of
+10 model requests across the whole report, including any repair invocations.
+There are at most two repairs, and the request budget can stop work sooner.
+The dashboard waits an extra
 30 seconds for the server's result; ordinary API requests retain shorter limits.
 Set `AI_TIMEOUT_SECONDS` equally for API and UI when they run separately.
 The allowed range is 1–600 seconds. Timeouts cancel the in-process workflow and
 retain completed tool events, elapsed times and the last completed tool name.
 They do not publish a partial report. Slow or repeated failures still need
 investigation.
+
+### Work within provider quotas
+
+`AI_REQUESTS_PER_MINUTE` defaults to 4, leaving headroom below a 5-RPM project
+limit. Every coordinator and specialist model call uses the same per-model gate
+inside one API process. The first request after an API restart waits 60 seconds
+to clear recent traffic; subsequent requests are spaced apart. SDK automatic
+retries are disabled so they cannot make extra, unpaced requests. Provider errors
+still fail clearly; work is not silently replaced with fabricated output.
+
+Each agent receives the same authorised evidence snapshot directly, avoiding
+separate model round trips to retrieve it. Actual request counts depend on the
+model's choices. The offline integration test covers all four specialists in
+nine model calls; this is not a guarantee for live inference.
+
+Check your project's actual RPM, TPM and daily allowance in AI Studio. This gate
+does not extend daily quotas, count requests made by other applications or persist
+daily usage. The standalone diagnostic also consumes provider allowance.
+Multiple API workers/replicas need a shared distributed rate limiter before
+deployment. Keep this configuration to a single API process meanwhile.
 
 ### Troubleshoot live agents
 

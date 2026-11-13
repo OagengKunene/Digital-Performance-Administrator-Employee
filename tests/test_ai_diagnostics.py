@@ -37,7 +37,7 @@ def test_unknown_error_does_not_expose_its_message():
 
 
 def test_workflow_failure_returns_and_logs_safe_diagnostics(monkeypatch, caplog):
-    def fail(_):
+    def fail(_, **kwargs):
         raise ValueError("secret-key-and-private-prompt")
     monkeypatch.setattr("pae.agents.build_team", fail)
     with caplog.at_level(logging.ERROR, logger="pae.agents"):

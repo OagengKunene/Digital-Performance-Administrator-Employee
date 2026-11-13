@@ -109,7 +109,10 @@ def test_numeric_reviewer_detects_and_accepts_repair():
 def test_actual_adk_team_constructs_without_network():
     team = build_team({"class_id": 1})
     assert team.name == "performance_administrator"
-    assert len(team.tools) == 5
+    assert len(team.tools) == 4
+    assert {tool.agent.name for tool in team.tools} == {
+        "performance_analyst", "intervention_planner", "reporting_agent", "quality_reviewer"}
+    assert team.model.retry_options.attempts == 1
 
 
 def test_login_and_revocation(client):

@@ -54,7 +54,7 @@ def test_timeout_cancels_work_and_retains_completed_tool(monkeypatch):
 
     monkeypatch.setattr("pae.agents.settings", lambda: SimpleNamespace(
         google_api_key="", ai_timeout_seconds=0.1, ai_max_model_calls=24))
-    monkeypatch.setattr("pae.agents.build_team", lambda data: object())
+    monkeypatch.setattr("pae.agents.build_team", lambda data, **kwargs: object())
     monkeypatch.setattr(google.adk.runners, "Runner", SlowRunner)
     result = asyncio.run(run_reviewed_report(
         {"mean_percentage": 75.0, "marked_count": 3, "missing_count": 1},

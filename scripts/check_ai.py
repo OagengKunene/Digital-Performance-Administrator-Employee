@@ -35,7 +35,8 @@ def main():
         from google import genai
         from google.genai import types
         with genai.Client(api_key=config.google_api_key, vertexai=False,
-                          http_options=types.HttpOptions(timeout=20000)) as client:
+                          http_options=types.HttpOptions(timeout=20000,
+                              retry_options=types.HttpRetryOptions(attempts=1))) as client:
             response = client.models.generate_content(
                 model=config.gemini_model, contents="Reply with the single word OK.",
             )

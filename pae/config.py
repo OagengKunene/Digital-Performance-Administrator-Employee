@@ -9,7 +9,8 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     gemini_model: str = "gemini-3.6-flash"
     ai_timeout_seconds: int = Field(default=300, ge=1, le=600)
-    ai_max_model_calls: int = Field(default=24, ge=1, le=50)
+    ai_max_model_calls: int = Field(default=10, ge=1, le=50)
+    ai_requests_per_minute: int = Field(default=4, ge=1, le=60)
 
 
 @lru_cache

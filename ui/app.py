@@ -138,6 +138,7 @@ try:
     elif view == "Agent reports":
         st.subheader("Live ADK workflow")
         st.caption("Requires GOOGLE_API_KEY. Verified metrics do not imply that every recommendation is educationally validated; staff review remains necessary.")
+        st.info("Requests are paced to respect provider limits. The first run after an API restart includes a one-minute cooldown and may take several minutes. Daily provider quotas still apply.")
         goal = st.text_area("Task", value="Review this class's performance and prepare a teacher report with evidence-based support recommendations.")
         if st.button("Run agent team"):
             with st.spinner(f"Agents are analysing, drafting and reviewing. This may take up to {settings().ai_timeout_seconds} seconds."):

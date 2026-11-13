@@ -11,6 +11,7 @@ from pae.config import settings
 
 config = settings()
 print(f"AI model: {config.gemini_model}; report time limit: {config.ai_timeout_seconds}s", flush=True)
+print(f"AI pacing: {config.ai_requests_per_minute} requests/minute; first AI request waits 60s; per-report request budget: {config.ai_max_model_calls}", flush=True)
 children = []
 exit_code = 0
 try:
