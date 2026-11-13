@@ -6,13 +6,22 @@ from datetime import date
 from typing import Literal
 from fastapi import FastAPI, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import select, text
+from sqlalchemy import select, text, delete
 from .db import get_db, User, LoginSession, SchoolClass, Learner, Mark, Intervention, Audit, AgentRun
-from .security import current_user, verify_password, hash_password, token_hash
+from .security import current_user, verify_password, hash_password, token_hash, DUMMY_HASH
 from .services import allowed_class, audit, evidence, import_csv
 
 app = FastAPI(title="Performance Administrator", version="0.1.0")
 attempts = defaultdict(deque)
+LOGIN_WINDOW_SECONDS = 300
+LOGIN_MAX_ATTEMPTS = 10
+ATTEMPT_KEYS_SWEEP_AT = 1000  # sweep stale keys once the table grows past this
+
+
+def prune_attempts(now):
+    """Drop rate-limit entries with no attempts in the window, so memory stays bounded."""
+    for key in [k for k, q in attempts.items() if not q or q[-1] < now - LOGIN_WINDOW_SECONDS]:
+        del attempts[key]
 
 
 class StrictBody(BaseModel):
@@ -137,17 +146,22 @@ def ready(db=Depends(get_db)):
 
 @app.post("/auth/login")
 def login(body: Login, request: Request, db=Depends(get_db)):
-    key = (request.client.host if request.client else "unknown", body.email.lower())
+    key = (request.client.host if request.client else "unknown", body.email.strip().lower())
     now = time.time()
+    if len(attempts) > ATTEMPT_KEYS_SWEEP_AT:
+        prune_attempts(now)
     recent = attempts[key]
-    while recent and recent[0] < now - 300:
+    while recent and recent[0] < now - LOGIN_WINDOW_SECONDS:
         recent.popleft()
-    if len(recent) >= 10:
+    if len(recent) >= LOGIN_MAX_ATTEMPTS:
         raise HTTPException(429, "Too many attempts. Try again in five minutes.")
     recent.append(now)
     u = db.scalar(select(User).where(User.email == body.email.strip().lower()))
-    if not u or not verify_password(body.password, u.password_hash):
+    # Always run one full password check, even for unknown emails (equal timing).
+    valid = verify_password(body.password, u.password_hash if u else DUMMY_HASH)
+    if not u or not valid:
         raise HTTPException(401, "Invalid credentials")
+    db.execute(delete(LoginSession).where(LoginSession.expires < now))  # housekeeping
     token = secrets.token_urlsafe(48)
     db.add(LoginSession(token_hash=token_hash(token), user_id=u.id, expires=now + 8 * 3600))
     db.commit()

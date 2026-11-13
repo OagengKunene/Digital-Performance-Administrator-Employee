@@ -31,6 +31,16 @@ def import_csv(db, user, class_id, content, kind):
         if not 1 <= len(rows) <= 5000:
             raise ValueError("Upload between 1 and 5000 rows")
         learners = set(db.scalars(select(Learner.id).where(Learner.class_id == class_id)))
+        # Load what already exists ONCE per upload instead of once per row.
+        # Before: one SELECT per CSV row (up to 5,000). After: one SELECT per upload.
+        if kind == "marks":
+            existing_max, existing_keys = {}, set()
+            for assessment, topic, learner_id, possible in db.execute(
+                    select(Mark.assessment, Mark.topic, Mark.learner_id, Mark.possible).where(Mark.class_id == class_id)):
+                existing_max.setdefault((assessment, topic), set()).add(possible)
+                existing_keys.add((learner_id, assessment, topic))
+        else:
+            existing_days = {(lid, day) for lid, day in db.execute(select(Attendance.learner_id, Attendance.day).where(Attendance.learner_id.in_(learners)))} if learners else set()
         staged, seen, maxima = [], set(), {}
         for index, raw in enumerate(rows, 2):
             if any(v is None for v in raw.values()) or None in raw:
@@ -47,11 +57,10 @@ def import_csv(db, user, class_id, content, kind):
                 if not math.isfinite(possible) or possible <= 0 or (earned is not None and (not math.isfinite(earned) or not 0 <= earned <= possible)):
                     raise ValueError(f"Row {index}: marks outside valid range")
                 topic_key = (r["assessment"], r["topic"])
-                existing = db.scalars(select(Mark).where(Mark.class_id == class_id, Mark.assessment == r["assessment"], Mark.topic == r["topic"])).all()
                 maxima.setdefault(topic_key, possible)
-                if maxima[topic_key] != possible or any(m.possible != possible for m in existing):
+                if maxima[topic_key] != possible or any(m != possible for m in existing_max.get(topic_key, ())):
                     raise ValueError(f"Row {index}: inconsistent maximum for assessment/topic")
-                if any(m.learner_id == r["learner_id"] for m in existing):
+                if key in existing_keys:
                     raise ValueError(f"Row {index}: mark already exists; use an audited correction")
                 obj = Mark(class_id=class_id, learner_id=r["learner_id"], assessment=r["assessment"], topic=r["topic"], possible=possible, earned=earned)
             else:
@@ -59,7 +68,7 @@ def import_csv(db, user, class_id, content, kind):
                 key = (r["learner_id"], day)
                 if r["status"] not in {"present", "absent", "excused", "unknown"}:
                     raise ValueError(f"Row {index}: invalid attendance status")
-                if db.scalar(select(Attendance.id).where(Attendance.learner_id == r["learner_id"], Attendance.day == day)):
+                if key in existing_days:
                     raise ValueError(f"Row {index}: attendance already recorded")
                 obj = Attendance(class_id=class_id, learner_id=r["learner_id"], day=day, status=r["status"])
             if key in seen:
@@ -96,9 +105,13 @@ def evidence(db, user, class_id):
         topic_results.append({"topic": topic, "marked": len(scored), "mean_percentage": round(100 * sum(m.earned for m in scored) / max_total, 2) if max_total else None})
     expected = len(learners) * len(pairs)
     interventions = db.scalars(select(Intervention).where(Intervention.class_id == class_id)).all()
+    # Group once: O(marks) instead of O(learners x marks).
+    marked_by_learner = defaultdict(list)
+    for m in marked:
+        marked_by_learner[m.learner_id].append(m)
     learner_results = []
     for learner in learners:
-        rows = [m for m in marked if m.learner_id == learner.id]
+        rows = marked_by_learner[learner.id]
         total = sum(m.possible for m in rows)
         mean = round(100 * sum(m.earned for m in rows) / total, 2) if total else None
         learner_results.append({"learner_id": learner.id, "mean_percentage": mean,

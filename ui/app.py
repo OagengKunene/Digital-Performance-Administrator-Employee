@@ -21,7 +21,10 @@ def api(method, path, **kwargs):
     if response.status_code >= 400:
         if response.status_code == 401:
             st.session_state.pop("token", None)
-        detail = response.json().get("detail", "Request failed")
+        try:
+            detail = response.json().get("detail", "Request failed")
+        except ValueError:  # proxy or crash pages are HTML/plain text, not JSON
+            detail = f"Server error {response.status_code}. Check the terminal running scripts/start.py."
         st.error(str(detail))
         st.stop()
     return response.json()
