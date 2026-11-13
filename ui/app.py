@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 from datetime import date
 import httpx
 import streamlit as st
+from pae.config import settings
 
 st.set_page_config(page_title="Performance Administrator", layout="wide")
 API = os.environ.get("PAE_API_URL", "http://127.0.0.1:8000")
@@ -17,7 +18,10 @@ def api(method, path, **kwargs):
     token = st.session_state.get("token")
     if token:
         headers["Authorization"] = "Bearer " + token
-    response = httpx.request(method, API + path, headers=headers, timeout=110, trust_env=use_proxy, **kwargs)
+    # Agent reports have a bounded server deadline; allow time for its response to return.
+    read_timeout = settings().ai_timeout_seconds + 30 if method.upper() == "POST" and path.endswith("/runs") else 30
+    timeout = httpx.Timeout(read_timeout, connect=10)
+    response = httpx.request(method, API + path, headers=headers, timeout=timeout, trust_env=use_proxy, **kwargs)
     if response.status_code >= 400:
         if response.status_code == 401:
             st.session_state.pop("token", None)
@@ -136,7 +140,7 @@ try:
         st.caption("Requires GOOGLE_API_KEY. Verified metrics do not imply that every recommendation is educationally validated; staff review remains necessary.")
         goal = st.text_area("Task", value="Review this class's performance and prepare a teacher report with evidence-based support recommendations.")
         if st.button("Run agent team"):
-            with st.spinner("Agents are analysing, drafting and reviewing..."):
+            with st.spinner(f"Agents are analysing, drafting and reviewing. This may take up to {settings().ai_timeout_seconds} seconds."):
                 result = api("POST", f"/classes/{cid}/runs", json={"goal": goal})
             st.json(result)
         for run in api("GET", f"/classes/{cid}/runs"):

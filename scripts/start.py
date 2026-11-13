@@ -7,6 +7,10 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
 os.chdir(root)
+from pae.config import settings
+
+config = settings()
+print(f"AI model: {config.gemini_model}; report time limit: {config.ai_timeout_seconds}s", flush=True)
 children = []
 exit_code = 0
 try:

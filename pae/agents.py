@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from pydantic import BaseModel, ConfigDict, Field
 from .config import settings
 from .ai_diagnostics import describe_ai_error
@@ -71,6 +72,7 @@ async def run_reviewed_report(data, goal, run_id):
     if config.google_api_key:
         os.environ.setdefault("GOOGLE_API_KEY", config.google_api_key)
     events = []
+    started = time.monotonic()
 
     async def execute():
         from google.adk.runners import Runner
@@ -93,9 +95,9 @@ async def run_reviewed_report(data, goal, run_id):
                     call = getattr(part, "function_call", None)
                     response = getattr(part, "function_response", None)
                     if call:
-                        events.append({"attempt": attempt + 1, "agent": event.author, "type": "tool_call", "tool": call.name})
+                        events.append({"attempt": attempt + 1, "agent": event.author, "type": "tool_call", "tool": call.name, "elapsed_seconds": round(time.monotonic() - started, 2)})
                     elif response:
-                        events.append({"attempt": attempt + 1, "agent": event.author, "type": "tool_return", "tool": response.name})
+                        events.append({"attempt": attempt + 1, "agent": event.author, "type": "tool_return", "tool": response.name, "elapsed_seconds": round(time.monotonic() - started, 2)})
                 if event.is_final_response() and event.content:
                     final = "".join(part.text or "" for part in event.content.parts if not getattr(part, "thought", False))
             try:
@@ -120,7 +122,16 @@ async def run_reviewed_report(data, goal, run_id):
     try:
         return await asyncio.wait_for(execute(), timeout=config.ai_timeout_seconds)
     except TimeoutError:
-        return {"status": "failed", "result": {"message": "AI task timed out; no report published."}, "events": events}
+        elapsed = round(time.monotonic() - started, 2)
+        last_tool = next((event["tool"] for event in reversed(events)
+                          if event["type"] == "tool_return"), None)
+        logger.warning("AI run timed out run_id=%s limit_seconds=%s elapsed_seconds=%s last_completed_tool=%s",
+                       run_id, config.ai_timeout_seconds, elapsed, last_tool)
+        return {"status": "failed", "result": {
+            "message": f"AI task exceeded its {config.ai_timeout_seconds}-second limit; no report published.",
+            "error_code": "workflow_timeout", "limit_seconds": config.ai_timeout_seconds,
+            "elapsed_seconds": elapsed, "last_completed_tool": last_tool,
+        }, "events": events}
     except Exception as error:
         detail = describe_ai_error(error)
         # Never log exception messages/tracebacks: SDK errors may include secrets or prompts.

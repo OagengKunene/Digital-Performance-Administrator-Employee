@@ -85,3 +85,35 @@ def test_wrong_password_shows_error_without_transport_exception(backend):
     assert page.error
     assert "token" not in page.session_state or not page.session_state["token"]
     assert backend == [("/auth/login", None)]
+
+
+def test_report_request_waits_longer_than_server_deadline(backend, monkeypatch):
+    import httpx
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("pae.config.settings", lambda: SimpleNamespace(
+        google_api_key="test-key-not-used", ai_timeout_seconds=240))
+
+    async def report(*args):
+        return {"status": "verified_metrics", "result": {
+            "summary": "Interface test report", "mean_percentage": 75.0,
+            "marked_count": 3, "missing_count": 1, "recommendations": [],
+        }, "events": []}
+
+    monkeypatch.setattr("pae.agents.run_reviewed_report", report)
+    original = httpx.request
+    observed = []
+
+    def request(method, url, **kwargs):
+        if method == "POST" and url.endswith("/runs"):
+            observed.append(kwargs["timeout"])
+        return original(method, url, **kwargs)
+
+    monkeypatch.setattr(httpx, "request", request)
+    page = sign_in("teacher@example.test", "a-long-test-password")
+    page.sidebar.radio[0].set_value("Agent reports").run()
+    next(button for button in page.button if button.label == "Run agent team").click().run()
+    assert not page.exception
+    assert len(observed) == 1
+    assert observed[0].read == 270
+    assert observed[0].connect == 10

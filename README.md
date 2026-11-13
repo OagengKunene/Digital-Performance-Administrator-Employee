@@ -41,7 +41,16 @@ Core administration works without an AI key. Live agent reports require one.
 3. Stop and restart the Codespace, then start the application again.
 4. Open **Agent reports**, enter an objective and choose **Run agent team**.
 
-Set `GEMINI_MODEL` to a model your account can access. The default is `gemini-flash-latest`. Provider quotas still apply. Missing credentials never trigger fabricated agent output. Failed, unresolved and metric-verified runs are distinct statuses.
+Set `GEMINI_MODEL` to a model your account can access. The default is `gemini-3.6-flash`. A successful short generation test does not guarantee that every multi-agent run will finish within its deadline. Provider quotas still apply. Missing credentials never trigger fabricated agent output. Failed, unresolved and metric-verified runs are distinct statuses.
+
+Report runs have a default 300-second wall-clock limit and up to 24 model calls
+per invocation, with at most two repair invocations. The dashboard waits an extra
+30 seconds for the server's result; ordinary API requests retain shorter limits.
+Set `AI_TIMEOUT_SECONDS` equally for API and UI when they run separately.
+The allowed range is 1–600 seconds. Timeouts cancel the in-process workflow and
+retain completed tool events, elapsed times and the last completed tool name.
+They do not publish a partial report. Slow or repeated failures still need
+investigation.
 
 ### Troubleshoot live agents
 
