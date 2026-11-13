@@ -5,9 +5,13 @@ not receive a database handle or a tool accepting arbitrary learner/class IDs.
 """
 import asyncio
 import json
+import logging
 import os
 from pydantic import BaseModel, ConfigDict, Field
 from .config import settings
+from .ai_diagnostics import describe_ai_error
+
+logger = logging.getLogger(__name__)
 
 
 class ReviewedReport(BaseModel):
@@ -63,16 +67,16 @@ def build_team(data):
 
 
 async def run_reviewed_report(data, goal, run_id):
-    from google.adk.runners import Runner
-    from google.adk.sessions import InMemorySessionService
-    from google.adk.agents.run_config import RunConfig
-    from google.genai import types
     config = settings()
     if config.google_api_key:
         os.environ.setdefault("GOOGLE_API_KEY", config.google_api_key)
     events = []
 
     async def execute():
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+        from google.adk.agents.run_config import RunConfig
+        from google.genai import types
         service = InMemorySessionService()
         runner = Runner(agent=build_team(data), app_name="pae", session_service=service)
         session = await service.create_session(app_name="pae", user_id="authorised_user", session_id=run_id)
@@ -117,6 +121,9 @@ async def run_reviewed_report(data, goal, run_id):
         return await asyncio.wait_for(execute(), timeout=config.ai_timeout_seconds)
     except TimeoutError:
         return {"status": "failed", "result": {"message": "AI task timed out; no report published."}, "events": events}
-    except Exception:
-        # Do not leak credentials, prompts or SDK request details to the browser.
-        return {"status": "failed", "result": {"message": "AI provider or workflow failed. Check model access, quota and server logs."}, "events": events}
+    except Exception as error:
+        detail = describe_ai_error(error)
+        # Never log exception messages/tracebacks: SDK errors may include secrets or prompts.
+        logger.error("AI run failed run_id=%s error_code=%s error_type=%s provider_code=%s",
+                     run_id, detail["error_code"], detail["error_type"], detail["provider_code"])
+        return {"status": "failed", "result": detail, "events": events}

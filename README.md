@@ -43,6 +43,21 @@ Core administration works without an AI key. Live agent reports require one.
 
 Set `GEMINI_MODEL` to a model your account can access. The default is `gemini-flash-latest`. Provider quotas still apply. Missing credentials never trigger fabricated agent output. Failed, unresolved and metric-verified runs are distinct statuses.
 
+### Troubleshoot live agents
+
+In a second terminal, run:
+
+```bash
+.venv/bin/python scripts/check_ai.py
+```
+
+This checks whether the key is loaded, constructs the ADK team and makes one short
+Gemini request without school data. It prints only safe diagnostic metadata, not
+your key or raw exception messages. It does not prove the full multi-agent report
+will succeed. Failed report runs now include an error category, exception type
+and provider HTTP code when available. A quota error does not prove that a new
+billing plan is required; check your project's actual limits first.
+
 ### Working with your teammate
 
 Invite them through **Settings → Collaborators**. Each teammate can open a Codespace, use feature branches and share changes through commits and pull requests. Each Codespace has its own database; pushing code does not synchronise school records. For a shared live view, use Live Share or the eventual hosted application. Save and push work before deleting a Codespace. Database volumes persist across restarts but are not backups against Codespace deletion.
