@@ -184,7 +184,7 @@ def test_missing_roster_evidence_is_retried_without_guessing(client, teacher, pr
     process_batch(db_factory)
     with db_factory() as db:
         assert db.scalar(select(IngestionBatch)).status == "completed"
-        assert db.scalar(select(FollowUp)).status == "resolved"
+        assert db.scalar(select(FollowUp).where(FollowUp.issue_key.like("ingestion:%"))).status == "resolved"
 
 
 def test_feed_keys_are_scoped_rotatable_and_not_exposed(client, teacher, principal):
