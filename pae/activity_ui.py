@@ -52,7 +52,9 @@ def render_activity(events, *, work_plan=None, expected_agents=None, status=None
 
 def render_photo_correction(item):
     if item.get("demonstrate_repair"):
-        st.info("Controlled demonstration: the first transcription deliberately contains one error. The validator must catch it; correction re-reads the actual photo before another check.")
+        injected = item.get("report", {}).get("workflow", {}).get("fault_injected", False)
+        st.info("Controlled demonstration: a transcription error is deliberately introduced once question marks are readable. "
+                "The validator must catch it; correction re-reads the actual photo. Seeded fault: " + ("injected" if injected else "awaiting a readable question"))
     work = item.get("report", {}).get("workflow", {})
     readings = work.get("readings", [])
     if len(readings) > 1:

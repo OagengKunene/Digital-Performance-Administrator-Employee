@@ -166,3 +166,17 @@ def test_changed_total_needs_a_second_matching_source_read(client, teacher, db_f
     item = detail(client, teacher, identifier)
     assert item["status"] == "completed" and item["attempts"] == 3
     assert item["report"]["review"]["checked_percentage"] == 62.5
+
+
+def test_controlled_demo_cannot_claim_correction_when_no_fault_was_inserted(client, teacher, db_factory):
+    from pae.script_reader import ScriptReading
+    response = client.post("/classes/1/colleague-demo?reader=local", headers=teacher)
+    assert response.status_code == 202
+    identifier = response.json()["photo"]["id"]
+    total_only = ScriptReading(total_earned=25, total_possible=40).model_dump()
+    for _ in range(12):
+        if not process_photo(db_factory, lambda *args: total_only): break
+    item = detail(client, teacher, identifier)
+    assert item["status"] == "requires_review"
+    assert not item["report"]["workflow"].get("fault_injected")
+    assert client.get("/notifications", headers=teacher).json() == []

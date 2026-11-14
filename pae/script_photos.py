@@ -326,6 +326,8 @@ def process_photo(factory, reader_fn=None):
                     evidence={"new_question_marks": result["questions"], "strategy": work["strategy"]}))
         elif phase == "validating":
             issues = check_reading(ScriptReading.model_validate(extraction))
+            if work.get("demonstrate_repair") and not work.get("fault_injected"):
+                issues.append("The controlled demo has not obtained readable question marks for its labelled fault; it cannot claim a correction yet.")
             staff_verified = bool(work["readings"] and work["readings"][-1].get("source") == "staff correction")
             if not staff_verified and original.get("learner_id") and extraction.get("learner_id") and original["learner_id"] != extraction["learner_id"]:
                 issues.append("Learner ID changed between reads; staff must verify the identity.")
