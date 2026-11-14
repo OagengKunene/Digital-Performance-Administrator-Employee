@@ -4,7 +4,26 @@ An autonomous, multi-agent school employee under active development. It proactiv
 
 Every accepted marks/attendance capture now automatically evaluates the class and delivers a factual report to its assigned teacher and school principals. The ADK team adds a reviewed agent interpretation in the background. Connect a CSV export source once; routine captures need no task prompt or Run button. In-app inboxes work by default; optional TLS SMTP adds email.
 
-See [automatic capture and delivery](docs/automatic-capture.md) for source setup, routing, retries and email configuration. Curriculum planning, handwritten script/rubric assessment and teacher-absence cover materials remain development work.
+See [automatic capture and delivery](docs/automatic-capture.md) for source setup, routing, retries and email configuration. Photos of already marked scripts now have an automatic demo workflow below. New marking of unmarked answers against a rubric, curriculum planning and teacher-absence cover materials remain development work.
+
+## Upload a marked test photo
+
+Open **Photo script demo** and upload a JPG, PNG or WebP image. Processing starts
+on upload: photo reading → live demo marks → student report → numerical review →
+teacher/principal inbox delivery. No task prompt or Run agent button is needed.
+The report includes the script result, question/topic breakdown, strengths,
+support areas and follow-up suggestions. Unclear scores or inconsistent totals
+pause for evidence rather than being guessed. Official class marks are unchanged.
+
+**Try a sample marked script** runs a fictional page through real local OCR with
+no API key and should produce 25/40 (62.5%). Local OCR reads clear printed score
+summaries; configured Groq/Gemini vision can attempt handwriting. A successful
+arithmetic review does not certify every transcribed digit.
+
+After pulling this version, run `.venv/bin/python scripts/setup.py` before starting
+the app; the new photo table must be initialised. Setup attempts to install local
+OCR automatically in Codespaces. See the [photo demo guide](docs/photo-script-demo.md)
+for setup, supported photos, vision models and validation boundaries.
 
 ## Presentation demo (no API key needed)
 

@@ -97,7 +97,24 @@ def main():
                     teacher_headers = {"Authorization": "Bearer " + response.json()["access_token"]}
                     delivered = client.get("http://127.0.0.1:8000/notifications", headers=teacher_headers).json()
                     assert any(m["kind"] == "capture_evaluation" for m in delivered)
-                    print("PASS: all three services, watched CSV capture, verified evaluation, automatic teacher/principal inbox delivery, no AI key or report prompt.")
+                    photo = client.post(prefix + "/script-photos/sample", headers=teacher_headers)
+                    photo.raise_for_status()
+                    identifier = photo.json()["id"]
+                    deadline = time.monotonic() + 30
+                    while True:
+                        result = client.get(prefix + "/script-photos/" + identifier, headers=teacher_headers).json()
+                        if result["status"] == "completed":
+                            break
+                        if time.monotonic() > deadline or result["status"] == "requires_review":
+                            raise RuntimeError("Photo demo did not complete: " + str(result["issues"]))
+                        time.sleep(0.2)
+                    assert result["report"]["mean_percentage"] == 62.5
+                    assert result["report"]["review"]["status"] == "passed"
+                    for audience in (headers, teacher_headers):
+                        inbox = client.get("http://127.0.0.1:8000/notifications", headers=audience).json()
+                        assert any(m["kind"] == "script_evaluation" for m in inbox)
+                    assert client.get(prefix + "/statistics", headers=headers).json()["mean_percentage"] == 75
+                    print("PASS: all three services, watched CSV capture, automatic teacher/principal delivery, actual photo OCR and reviewed student report; no AI key or report prompt.")
             except Exception:
                 log.flush()
                 log.seek(0)

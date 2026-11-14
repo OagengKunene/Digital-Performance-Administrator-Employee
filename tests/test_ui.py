@@ -143,3 +143,53 @@ def test_offline_engine_and_demonstration_from_the_interface(backend, monkeypatc
     next(button for button in page.button if button.label == "Run agent team").click().run()
     assert not page.exception
     assert any("queued" in item.value.lower() for item in page.success)
+
+
+def test_photo_demo_runs_sample_without_task_or_agent_button(backend, db_factory):
+    import shutil
+    from pae.script_photos import process_photo
+    if not shutil.which("tesseract"):
+        pytest.skip("Tesseract required for real photo demo")
+    page = sign_in("teacher@example.test", "a-long-test-password")
+    page.sidebar.radio[0].set_value("Photo script demo").run()
+    assert not page.exception
+    assert not any(button.label == "Run agent team" for button in page.button)
+    next(button for button in page.button if button.label == "Try a sample marked script").click().run()
+    assert not page.exception
+    for _ in range(5):
+        if not process_photo(db_factory):
+            break
+    page.run()
+    assert not page.exception
+    assert any(metric.value == "62.5%" for metric in page.metric)
+    assert any("Completed automatically" in message.value for message in page.success)
+    assert any(button.label == "Download student report" for button in page.get("download_button"))
+
+
+def test_photo_upload_starts_automatically_and_refresh_does_not_resubmit(backend, db_factory, monkeypatch):
+    import shutil
+    from types import SimpleNamespace
+    from sqlalchemy import select, func
+    from pae.db import ScriptPhoto
+    from pae.script_photos import process_photo, sample_script
+    import streamlit as st
+    if not shutil.which("tesseract"):
+        pytest.skip("Tesseract required")
+    image = sample_script("L1")
+    uploaded = SimpleNamespace(name="student-script.png", getvalue=lambda: image)
+    # AppTest has no file chooser driver. Inject only its uploaded-file result;
+    # the page, HTTP upload, validation, actual OCR and report remain real.
+    original = st.file_uploader
+    monkeypatch.setattr(st, "file_uploader", lambda label, *args, **kwargs:
+        uploaded if label.startswith("Drop a marked") else original(label, *args, **kwargs))
+    page = sign_in("teacher@example.test", "a-long-test-password")
+    page.sidebar.radio[0].set_value("Photo script demo").run()
+    assert not page.exception
+    page.run()
+    with db_factory() as db:
+        assert db.scalar(select(func.count()).select_from(ScriptPhoto)) == 1
+    for _ in range(5):
+        if not process_photo(db_factory): break
+    page.run()
+    assert not page.exception
+    assert any(metric.value == "62.5%" for metric in page.metric)

@@ -232,6 +232,29 @@ class EmailDelivery(Base):
     sent_at: Mapped[str | None] = mapped_column(nullable=True)
 
 
+class ScriptPhoto(Base):
+    __tablename__ = "script_photos"
+    __table_args__ = (UniqueConstraint("class_id", "image_hash", "reader"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    filename: Mapped[str]
+    image: Mapped[bytes]
+    image_hash: Mapped[str] = mapped_column(String(64))
+    reader: Mapped[str]
+    status: Mapped[str] = mapped_column(default="queued", index=True)
+    extraction: Mapped[dict] = mapped_column(JSON, default=dict)
+    original_extraction: Mapped[dict] = mapped_column(JSON, default=dict)
+    report: Mapped[dict] = mapped_column(JSON, default=dict)
+    events: Mapped[list] = mapped_column(JSON, default=list)
+    issues: Mapped[list] = mapped_column(JSON, default=list)
+    attempts: Mapped[int] = mapped_column(default=0)
+    next_at: Mapped[float] = mapped_column(default=0.0)
+    lease_owner: Mapped[str] = mapped_column(default="")
+    lease_until: Mapped[float] = mapped_column(default=0.0)
+    created_at: Mapped[str] = mapped_column(default=utcnow)
+
+
 def make_engine(url):
     if url.startswith("sqlite"):
         Path(".local").mkdir(exist_ok=True)

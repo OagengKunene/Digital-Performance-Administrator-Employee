@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
     email_retry_attempts: int = Field(default=5, ge=1, le=10)
+    groq_vision_model: str = "qwen/qwen3.8-27b"
+    gemini_vision_model: str = ""  # Empty uses the existing Gemini model setting.
+    photo_timeout_seconds: int = Field(default=120, ge=10, le=300)
 
 
 @lru_cache
