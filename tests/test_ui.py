@@ -129,3 +129,17 @@ def test_staff_connects_an_automatic_capture_source(backend):
     assert any("School marks export" in item.label for item in page.expander)
     assert any("Source key" in item.label and item.proto.type == 1 for item in page.text_input)
     assert any("/ingestion/" in item.value for item in page.code)
+
+
+def test_offline_engine_and_demonstration_from_the_interface(backend, monkeypatch):
+    from pae.config import settings
+    for name, value in {"google_api_key": "", "groq_api_key": "", "ai_provider": "offline"}.items():
+        monkeypatch.setattr(settings(), name, value)
+    page = sign_in("teacher@example.test", "a-long-test-password")
+    page.sidebar.radio[0].set_value("Agent reports").run()
+    engine = next(box for box in page.selectbox if box.label == "Engine")
+    assert engine.value == "offline"
+    next(box for box in page.checkbox if box.label.startswith("Demonstrate self-correction")).check().run()
+    next(button for button in page.button if button.label == "Run agent team").click().run()
+    assert not page.exception
+    assert any("queued" in item.value.lower() for item in page.success)

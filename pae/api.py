@@ -16,6 +16,11 @@ app = FastAPI(title="Performance Administrator", version="0.3.0")
 attempts = defaultdict(deque)
 
 
+def settings_provider():
+    from .config import settings
+    return settings().ai_provider
+
+
 class StrictBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -48,10 +53,14 @@ class FollowUp(StrictBody):
 
 class Goal(StrictBody):
     goal: str = Field(min_length=10, max_length=2000)
+    # None = the installation's AI_PROVIDER. "offline" needs no key.
+    provider: Literal["gemini", "groq", "offline"] | None = None
+    # Offline only: first report draft omits coverage so the reviewer's repair loop is visible.
+    demonstrate_repair: bool = False
 
 
 class ResumeRun(StrictBody):
-    provider: Literal["gemini", "groq"] | None = None
+    provider: Literal["gemini", "groq", "offline"] | None = None
 
 
 class PolicyBody(StrictBody):
@@ -272,7 +281,7 @@ def agent_runtime(user=Depends(current_user), db=Depends(get_db)):
     config = settings()
     return {"provider": config.ai_provider, "model": provider_details()[1],
             "configured": configured(), "fallback_provider": config.ai_fallback_provider,
-            "available_providers": {name: configured(name) for name in ["gemini", "groq"]},
+            "available_providers": {name: configured(name) for name in ["gemini", "groq", "offline"]},
             "worker_last_seen": db.scalar(select(func.max(WorkerHeartbeat.last_seen))),
             "autonomous_daily_report_limit": config.autonomous_daily_report_limit}
 
@@ -310,14 +319,17 @@ def run_agents(class_id: int, body: Goal, user=Depends(current_user), db=Depends
     from .providers import configured
     from .jobs import enqueue, public_run
     allowed_class(db, user, class_id)
-    if not configured():
-        raise HTTPException(503, "Configure the selected provider's API key in Codespaces secrets and restart.")
+    if not configured(body.provider):
+        raise HTTPException(503, "Configure the selected provider's API key in Codespaces secrets and restart, or choose offline.")
+    if body.demonstrate_repair and (body.provider or settings_provider()) != "offline":
+        raise HTTPException(422, "The self-correction demonstration runs only with the offline provider.")
     active = db.scalar(select(AgentRun.id).join(AgentJob).where(
         AgentRun.class_id == class_id, AgentJob.status.in_(["queued", "running", "retrying"])))
     if active:
         raise HTTPException(409, "A report is already active for this class. Open its saved progress.")
     try:
-        run = enqueue(db, user, class_id, body.goal)
+        run = enqueue(db, user, class_id, body.goal, provider=body.provider,
+                      demonstrate_repair=body.demonstrate_repair)
         db.commit()
     except IntegrityError:
         db.rollback()

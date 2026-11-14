@@ -9,8 +9,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./.local/pae.db"
     google_api_key: str = ""
     groq_api_key: str = ""
-    ai_provider: Literal["gemini", "groq"] = "gemini"
-    ai_fallback_provider: Literal["", "gemini", "groq"] = ""
+    ai_provider: Literal["gemini", "groq", "offline"] = "gemini"
+    ai_fallback_provider: Literal["", "gemini", "groq", "offline"] = ""
     groq_model: str = "openai/gpt-oss-20b"
     gemini_model: str = "gemini-3.6-flash"
     ai_timeout_seconds: int = Field(default=300, ge=1, le=600)

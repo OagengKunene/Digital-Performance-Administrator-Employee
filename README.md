@@ -6,6 +6,22 @@ Every accepted marks/attendance capture now automatically evaluates the class an
 
 See [automatic capture and delivery](docs/automatic-capture.md) for source setup, routing, retries and email configuration. Curriculum planning, handwritten script/rubric assessment and teacher-absence cover materials remain development work.
 
+## Presentation demo (no API key needed)
+
+```bash
+.venv/bin/python scripts/demo.py
+```
+
+This creates **Fictional Demo High School** once (16 learners, 2 tests × 4 topics, 3 missing marks, 10 days of attendance, 3 support actions with one overdue) and starts the API, worker and interface. Sign-in details are generated privately:
+
+```bash
+cat .local/demo-login.txt
+```
+
+Open **PORTS** → port **8501** → globe icon. In **Agent reports**, the **Engine** menu defaults to **Offline rules**: the same five stages (coordinator → performance analyst → intervention planner → reporting agent → quality reviewer) run through the normal durable job system, executed by deterministic rules instead of a model. A report finishes in about 15 seconds. Tick **Demonstrate self-correction** to make the first draft omit the missing-marks statement; the reviewer rejects it, the repair loop runs, and the corrected report is verified. Live providers with a configured key also appear in the menu.
+
+For a live model with a safety net, set `AI_PROVIDER=groq` (or `gemini`) and `AI_FALLBACK_PROVIDER=offline`: if the live provider fails a stage with a provider error, that stage is retried offline.
+
 ## Upgrade your existing Codespace
 
 Stop the running application with Ctrl+C, then run:
