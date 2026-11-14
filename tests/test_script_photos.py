@@ -45,6 +45,7 @@ def drain(db_factory, reading):
 def test_upload_to_individual_report_and_teacher_principal_inboxes(client, teacher, principal, db_factory, reading):
     identifier = upload(client, teacher)
     assert detail(client, teacher, identifier)["status"] == "queued"
+    assert process_photo(db_factory)  # Coordinator persists the plan first.
     assert process_photo(db_factory, lambda *args: reading)
     captured = detail(client, teacher, identifier)
     assert captured["status"] == "validating" and len(captured["extraction"]["questions"]) == 4
@@ -57,7 +58,8 @@ def test_upload_to_individual_report_and_teacher_principal_inboxes(client, teach
     assert report["review"]["checked_percentage"] == 62.5
     assert any("Geometry" in x for x in report["support_areas"])
     assert any("Algebra" in x for x in report["strengths"])
-    assert [e["stage"] for e in item["events"]] == ["queued", "reading", "validating", "reporting", "reviewing", "completed"]
+    assert {e["phase"] for e in item["activity"]} >= {"plan", "act", "observe", "check", "complete"}
+    assert item["work_plan"]["reader"] == "local"
     for headers in (teacher, principal):
         inbox = client.get("/notifications", headers=headers).json()
         assert len(inbox) == 1 and inbox[0]["kind"] == "script_evaluation"
@@ -87,7 +89,7 @@ def test_uncertain_or_inconsistent_readings_block_publication(client, teacher, d
 
 def test_report_metrics_are_rechecked_before_delivery(client, teacher, db_factory, reading):
     identifier = upload(client, teacher)
-    for _ in range(3):
+    for _ in range(4):
         assert process_photo(db_factory, lambda *args: reading)
     with db_factory() as db:
         item = db.get(ScriptPhoto, identifier)
@@ -96,8 +98,12 @@ def test_report_metrics_are_rechecked_before_delivery(client, teacher, db_factor
         db.commit()
     assert process_photo(db_factory)
     item = detail(client, teacher, identifier)
-    assert item["status"] == "requires_review" and item["report"]["review"]["status"] == "blocked"
+    assert item["status"] == "reporting" and item["report"]["review"]["status"] == "blocked"
     assert client.get("/notifications", headers=teacher).json() == []
+    drain(db_factory, reading)
+    item = detail(client, teacher, identifier)
+    assert item["status"] == "completed" and item["report"]["mean_percentage"] == 62.5
+    assert item["report_repairs"] == 1
 
 
 def test_duplicate_uploads_and_worker_replays_do_not_duplicate_delivery(client, teacher, db_factory, reading):
@@ -127,6 +133,7 @@ def test_staff_correction_resumes_automatically_and_preserves_original(client, t
     identifier = upload(client, teacher)
     uncertain = copy.deepcopy(reading)
     uncertain["questions"][0]["uncertain"] = True
+    uncertain["total_earned"] = 35
     drain(db_factory, uncertain)
     result = client.post("/classes/1/script-photos/" + identifier + "/correction", headers=teacher,
         json={"reading": reading, "reason": "Checked Q1 against the original marked paper"})
@@ -135,6 +142,7 @@ def test_staff_correction_resumes_automatically_and_preserves_original(client, t
     item = detail(client, teacher, identifier)
     assert item["status"] == "completed"
     assert item["original_extraction"]["questions"][0]["uncertain"] is True
+    assert item["original_extraction"]["total_earned"] == 35 and item["extraction"]["total_earned"] == 25
     with db_factory() as db:
         audit = db.scalar(select(Audit).where(Audit.action == "script_photo_transcription_corrected"))
         assert audit.detail["reason"].startswith("Checked Q1")
@@ -144,6 +152,7 @@ def test_staff_correction_resumes_automatically_and_preserves_original(client, t
 
 def test_expired_photo_lease_recovers_without_repeating_saved_ocr(client, teacher, db_factory, reading):
     identifier = upload(client, teacher)
+    assert process_photo(db_factory)
     assert process_photo(db_factory, lambda *args: reading)
     with db_factory() as db:
         item = db.get(ScriptPhoto, identifier)
@@ -156,6 +165,7 @@ def test_expired_photo_lease_recovers_without_repeating_saved_ocr(client, teache
 
 def test_replaced_worker_cannot_publish_or_save_its_old_ocr(client, teacher, db_factory, reading):
     identifier = upload(client, teacher)
+    assert process_photo(db_factory)
     def stolen(*args):
         with db_factory() as db:
             item = db.get(ScriptPhoto, identifier)
@@ -170,6 +180,7 @@ def test_replaced_worker_cannot_publish_or_save_its_old_ocr(client, teacher, db_
 
 def test_provider_outage_retries_without_exposing_error_details(client, teacher, db_factory, reading):
     identifier = upload(client, teacher)
+    assert process_photo(db_factory)
     def unavailable(*args):
         raise httpx.HTTPStatusError("private provider key and student content", request=httpx.Request("POST", "https://provider.invalid"),
             response=httpx.Response(503))

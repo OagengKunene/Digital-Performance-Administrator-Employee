@@ -151,8 +151,10 @@ async def run_stage(stage, data, goal, outputs, provider, model, request_id, on_
             if cleaned.startswith("```"):
                 cleaned = "\n".join(cleaned.splitlines()[1:-1])
             result = SCHEMAS[stage].model_validate(json.loads(cleaned))
-            if stage == "reporting_agent" and review_numbers(result, data):
-                raise StageOutputInvalid()
+            if stage == "reporting_agent":
+                numerical_issues = review_numbers(result, data)
+                if numerical_issues:
+                    raise StageOutputInvalid(numerical_issues)
             issues = grounding_issues(stage, result.model_dump(), data)
             if issues:
                 raise StageOutputInvalid(issues)

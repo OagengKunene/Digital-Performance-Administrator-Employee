@@ -11,6 +11,7 @@ from .services import allowed_class, evidence, audit
 from .config import settings
 from .providers import provider_details
 from .agents import WorkPlan, ReviewVerdict
+from .activity import activity, public_activity, PLANS, output_summary
 
 ACTIVE = {"queued", "running", "retrying"}
 
@@ -81,7 +82,7 @@ def next_stage(state):
 
 def public_run(db, run):
     result = {"id": run.id, "at": run.at, "status": run.status, "goal": run.goal,
-              "result": run.result, "events": run.events}
+              "result": run.result, "events": run.events, "activity": public_activity(run.events)}
     job = db.get(AgentJob, run.id)
     if job:
         state = job.state
@@ -122,10 +123,11 @@ def claim(factory, now=None):
 
 def checkpoint_event(factory, identifier, owner, event):
     with factory() as db:
-        job = db.scalar(select(AgentJob).where(AgentJob.id == identifier,
-            AgentJob.lease_owner == owner, AgentJob.lease_until > time.time()))
-        if not job:
+        changed = db.execute(update(AgentJob).where(AgentJob.id == identifier,
+            AgentJob.lease_owner == owner, AgentJob.lease_until > time.time()).values(updated_at=utcnow()))
+        if not changed.rowcount:
             raise LeaseLost()
+        job = db.get(AgentJob, identifier)
         run = db.get(AgentRun, identifier)
         user = db.get(User, run.user_id)
         if not user:
@@ -154,6 +156,8 @@ def save(factory, identifier, owner, state, status, result, *, event, next_at=0)
         run.events = [*run.events, {**event, "at": utcnow()}]
         from .captures import job_updated
         job_updated(db, run, db.get(AgentJob, identifier))
+        if status == "verified_metrics":
+            run.events = [*run.events, activity("delivery", "complete", "Reviewed report delivered to assigned teacher and principal inboxes.", tool="publish")]
         db.commit()
 
 
@@ -230,7 +234,13 @@ async def process_one(factory, executor=None):
         if not changed.rowcount:
             raise LeaseLost()
         run = db.get(AgentRun, identifier)
-        run.events = [*run.events, {"type": "stage_started", "agent": stage,
+        run.events = [*run.events,
+            activity(stage, "plan", PLANS[stage], evidence={"attempt": state["attempts"][stage],
+                "review_feedback": state["outputs"].get("review_feedback", {}), "source_hash": state["source_hash"]}),
+            activity(stage, "act", "Execute the " + stage.replace("_", " ") + " stage.",
+                tool="offline_stage" if chosen_provider == "offline" else "ADK run_stage",
+                evidence={"provider": chosen_provider, "model": model}),
+            {"type": "stage_started", "agent": stage,
             "provider": chosen_provider, "model": model, "at": utcnow()}]
         db.commit()
 
@@ -251,11 +261,16 @@ async def process_one(factory, executor=None):
             raise StageOutputInvalid() from None
         if stage == "reporting_agent":
             from .agents import review_numbers
-            if review_numbers(ReviewedReport.model_validate(result), data):
-                raise StageOutputInvalid()
+            numerical_issues = review_numbers(ReviewedReport.model_validate(result), data)
+            if numerical_issues:
+                raise StageOutputInvalid(numerical_issues)
         issues = grounding_issues(stage, result, data)
         if issues:
             raise StageOutputInvalid(issues)
+        checkpoint_event(factory, identifier, owner, activity(stage, "observe", "Structured output received.",
+            evidence=output_summary(stage, result)))
+        checkpoint_event(factory, identifier, owner, activity(stage, "check", "Stage schema and applicable source-grounding checks passed.",
+            tool="schema and grounding checks"))
         state["outputs"][stage] = result
         state.pop("stage_provider", None)
         status, response, event_type = "queued", {"message": "Stage saved."}, "stage_completed"
@@ -270,6 +285,12 @@ async def process_one(factory, executor=None):
             issues.extend(review_numbers(report, data))
             if not verdict.approved or issues:
                 if state["repair_count"] < 2:
+                    checkpoint_event(factory, identifier, owner, activity("quality_reviewer", "check",
+                        "Report rejected; publication is blocked until repair and re-review.",
+                        evidence={"issues": issues or ["Reviewer did not approve"], "rejected_report": output_summary("reporting_agent", state["outputs"]["reporting_agent"])}))
+                    checkpoint_event(factory, identifier, owner, activity("reporting_agent", "correct",
+                        "Revise the rejected report using the reviewer's specific feedback, then request another review.",
+                        tool="reporting_agent repair", evidence={"issues": issues or ["Reviewer did not approve"]}))
                     state["repair_count"] += 1
                     state["outputs"]["review_feedback"] = {"issues": issues or ["Reviewer did not approve"]}
                     state["outputs"].pop("reporting_agent", None)
@@ -299,6 +320,8 @@ async def process_one(factory, executor=None):
                     response = {**report.model_dump(), "assessment_count": data.get("assessment_count"),
                                 "review": verdict.model_dump(),
                                 "source_hash": state["source_hash"]}
+                    checkpoint_event(factory, identifier, owner, activity("quality_reviewer", "complete",
+                        "Report approved and source metrics verified.", evidence=output_summary("quality_reviewer", result)))
         state["active_stage"] = next_stage(state) if status == "queued" else None
         if status != "verified_metrics":
             response.setdefault("statistical_report", baseline_report(data))
@@ -338,6 +361,13 @@ async def process_one(factory, executor=None):
             status = "retrying"
         else:
             status = "failed"
+        checkpoint_event(factory, identifier, owner, activity(stage,
+            ("correct" if isinstance(error, StageOutputInvalid) else "retry") if status == "retrying" else "blocked",
+            "Stage failed validation or provider execution; retry only the unfinished work." if status == "retrying"
+            else "Stage stopped within its attempt budget; completed work remains saved.",
+            evidence={"error_code": detail["error_code"],
+                "issues": error.issues if isinstance(error, StageOutputInvalid) else [],
+                "retry_scheduled": status == "retrying", "next_provider": fallback if switched and can_retry else chosen_provider}))
         delay = min(120, settings().ai_retry_delay_seconds * 2 ** (count - 1))
         detail["statistical_report"] = baseline_report(data)
         save(factory, identifier, owner, state, status, detail,

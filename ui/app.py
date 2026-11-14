@@ -79,7 +79,7 @@ try:
     selected = st.sidebar.selectbox("Class", classes, format_func=lambda c: c["name"] + " · " + c["subject"])
     cid = selected["id"]
     data = api("GET", f"/classes/{cid}/evidence")
-    view = st.sidebar.radio("Workspace", ["Overview", "Photo script demo", "Reports inbox", "Assessment sources", "Import records", "Learner support", "Agent reports", "Autonomous monitoring", "Audit history"])
+    view = st.sidebar.radio("Workspace", ["Overview", "Agent activity", "Photo script demo", "Reports inbox", "Assessment sources", "Import records", "Learner support", "Agent reports", "Autonomous monitoring", "Audit history"])
     if view == "Overview":
         st.subheader(selected["name"] + " · " + selected["subject"])
         cols = st.columns(3)
@@ -93,6 +93,9 @@ try:
         with st.expander("Metric definitions"):
             st.json(data["definitions"])
         st.download_button("Download evidence JSON", json.dumps(data, indent=2), file_name=f"class-{cid}-evidence.json", mime="application/json")
+    elif view == "Agent activity":
+        from pae.activity_ui import render_agent_workspace
+        render_agent_workspace(api, cid)
     elif view == "Photo script demo":
         from pae.photo_ui import render_photo_demo
         render_photo_demo(api, cid)
@@ -253,7 +256,7 @@ try:
             json.dumps(api("GET", f"/classes/{cid}/statistics"), indent=2),
             file_name=f"class-{cid}-statistics.json", mime="application/json")
 
-        @st.fragment(run_every=3)
+        @st.fragment(run_every=1)
         def show_runs():
             runs = api("GET", f"/classes/{cid}/runs")
             if not runs:
@@ -263,6 +266,11 @@ try:
                 active = run["status"] in {"queued", "running", "retrying"}
                 with st.expander(run["at"] + " · " + run["status"], expanded=active):
                     st.write("Status:", run["status"])
+                    from pae.activity_ui import render_activity
+                    render_activity(run.get("activity", []),
+                        work_plan=progress.get("completed_outputs", {}).get("coordinator"),
+                        status=run["status"],
+                        expected_agents=["coordinator", "performance_analyst", "intervention_planner", "reporting_agent", "quality_reviewer"])
                     if progress:
                         st.write("Current stage:", progress["active_stage"] or "finished")
                         st.write("Saved stages:", ", ".join(progress["completed_stages"]) or "none")
@@ -291,7 +299,7 @@ try:
                         st.rerun()
                     if run["events"]:
                         with st.expander("Activity"):
-                            st.dataframe(run["events"], hide_index=True)
+                            st.dataframe([{k: event.get(k, "") for k in ("type", "agent", "phase", "message", "at")} for event in run["events"]], hide_index=True)
                     st.download_button("Download run", json.dumps(run, indent=2),
                         file_name=run["id"] + ".json", key=run["id"])
         show_runs()

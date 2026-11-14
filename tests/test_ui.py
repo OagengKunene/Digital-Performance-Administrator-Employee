@@ -193,3 +193,30 @@ def test_photo_upload_starts_automatically_and_refresh_does_not_resubmit(backend
     page.run()
     assert not page.exception
     assert any(metric.value == "62.5%" for metric in page.metric)
+
+
+def test_complete_colleague_demo_shows_both_teams_and_correction_evidence(backend, db_factory):
+    import asyncio
+    import shutil
+    from pae.script_photos import process_photo
+    from pae.jobs import process_one
+    if not shutil.which("tesseract"):
+        pytest.skip("Tesseract required for real demo")
+    page = sign_in("teacher@example.test", "a-long-test-password")
+    page.sidebar.radio[0].set_value("Agent activity").run()
+    next(button for button in page.button if button.label == "Run the complete colleague demo").click().run()
+    assert not page.exception
+    assert any("Both teams queued" in item.value for item in page.success)
+    for _ in range(12):
+        photo = process_photo(db_factory)
+        report = asyncio.run(process_one(db_factory))
+        if not photo and not report:
+            break
+    page.run()
+    assert not page.exception
+    assert any("62.5%" in item.value for item in page.success)
+    assert any("Controlled demonstration" in item.value for item in page.info)
+    assert any("Correction evidence" in item.value for item in page.subheader)
+    assert any("Rejected draft and replacement" in item.value for item in page.subheader)
+    assert any(frame.value.astype(str).apply(lambda col: col.str.contains("Correction agent")).any().any()
+               for frame in page.dataframe)

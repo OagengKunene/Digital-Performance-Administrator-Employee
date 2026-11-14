@@ -8,12 +8,21 @@ See [automatic capture and delivery](docs/automatic-capture.md) for source setup
 
 ## Upload a marked test photo
 
+For visible planning, actions, checks and automatic correction, open **Agent
+activity** and click **Run the complete colleague demo**. The photo and class
+teams show saved plans, actual tool/stage calls, failed checks, corrections and
+re-review. The fictional photo demo explicitly seeds one transcription error,
+then re-reads the original pixels before publishing the corrected result.
+See [visible agent demo](docs/visible-agent-demo.md) for the presentation flow,
+execution boundaries and how the ten supplied resources fit the architecture.
+
 Open **Photo script demo** and upload a JPG, PNG or WebP image. Processing starts
 on upload: photo reading → live demo marks → student report → numerical review →
 teacher/principal inbox delivery. No task prompt or Run agent button is needed.
 The report includes the script result, question/topic breakdown, strengths,
-support areas and follow-up suggestions. Unclear scores or inconsistent totals
-pause for evidence rather than being guessed. Official class marks are unchanged.
+support areas and follow-up suggestions. Failed score checks trigger bounded
+source re-reading and verification; unresolved evidence pauses for staff rather
+than being guessed. Official class marks are unchanged.
 
 **Try a sample marked script** runs a fictional page through real local OCR with
 no API key and should produce 25/40 (62.5%). Local OCR reads clear printed score

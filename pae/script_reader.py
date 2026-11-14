@@ -10,7 +10,7 @@ import subprocess
 import warnings
 
 import httpx
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps, ImageFilter, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import settings
@@ -119,10 +119,10 @@ def parse_transcript(text):
     return ScriptReading.model_validate(reading.model_dump()).model_dump()
 
 
-def local_read(image):
+def local_read(image, *, psm=6, alternate_psm=11):
     if not shutil.which("tesseract"):
         raise ValueError("Local OCR is not installed. Run scripts/setup.py or choose a configured vision reader.")
-    result = subprocess.run(["tesseract", "stdin", "stdout", "--psm", "6", "tsv"],
+    result = subprocess.run(["tesseract", "stdin", "stdout", "--psm", str(psm), "tsv"],
         input=image, capture_output=True, timeout=min(settings().photo_timeout_seconds, 45), check=True)
     lines = {}
     for row in csv.DictReader(io.StringIO(result.stdout.decode("utf-8")), delimiter="\t"):
@@ -134,7 +134,7 @@ def local_read(image):
     reading = parse_transcript("\n".join(" ".join(words) for words in lines.values()))
     # A second segmentation pass checks extraction stability. OCR word confidence
     # is not a calibrated probability, especially for fractions like 8/10.
-    second = subprocess.run(["tesseract", "stdin", "stdout", "--psm", "11"],
+    second = subprocess.run(["tesseract", "stdin", "stdout", "--psm", str(alternate_psm)],
         input=image, capture_output=True, timeout=min(settings().photo_timeout_seconds, 45), check=True)
     alternate = parse_transcript(second.stdout.decode("utf-8"))
     def scores(data):
@@ -157,13 +157,17 @@ Required JSON schema follows:
 """
 
 
-async def vision_read(image, reader):
+async def vision_read(image, reader, *, feedback=None):
     config = settings()
     model = config.groq_vision_model if reader == "groq" else (config.gemini_vision_model or config.gemini_model)
 
     async def request():
         await model_pacer(reader + ":" + model, config.ai_requests_per_minute, initial_delay=0).wait()
         prompt = PROMPT + json.dumps(ScriptReading.model_json_schema())
+        if feedback:
+            prompt += ("\nA previous transcription failed these checks: " + json.dumps(feedback[:20])
+                + ". Re-examine the actual photo independently. Do not solve for a score that makes a total balance. "
+                  "Copy written scores/totals exactly; keep ambiguity explicit.")
         if reader == "groq":
             async with httpx.AsyncClient(timeout=config.photo_timeout_seconds) as client:
                 response = await client.post("https://api.groq.com/openai/v1/chat/completions",
@@ -192,3 +196,17 @@ async def vision_read(image, reader):
 
 def read_script(image, reader):
     return local_read(image) if reader == "local" else asyncio.run(vision_read(image, reader))
+
+
+def reread_script(image, reader, strategy, feedback):
+    """Correct a transcription by performing a NEW read of the original pixels."""
+    with Image.open(io.BytesIO(image)) as source:
+        enhanced = ImageOps.autocontrast(ImageOps.grayscale(source))
+        if strategy == "contrast":
+            enhanced = enhanced.filter(ImageFilter.UnsharpMask(radius=1, percent=120, threshold=3))
+        output = io.BytesIO()
+        enhanced.convert("RGB").save(output, format="JPEG", quality=98)
+    data = output.getvalue()
+    if reader == "local":
+        return local_read(data, psm=11 if strategy == "layout" else 6, alternate_psm=6 if strategy == "layout" else 11)
+    return asyncio.run(vision_read(data, reader, feedback=feedback))
