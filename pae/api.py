@@ -4,16 +4,101 @@ import uuid
 from collections import defaultdict, deque
 from datetime import date
 from typing import Literal
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import select, text, func
 from sqlalchemy.exc import IntegrityError
 from .db import get_db, User, LoginSession, SchoolClass, Learner, Mark, Intervention, Audit, AgentRun, AgentJob, MonitoringPolicy, FollowUp as MonitorFollowUp, WorkerHeartbeat, utcnow
 from .security import current_user, verify_password, hash_password, token_hash
 from .services import allowed_class, audit, evidence, import_csv, wake_monitor
+from .script_reader import ScriptReading
 
 app = FastAPI(title="Performance Administrator", version="0.3.0")
 attempts = defaultdict(deque)
+
+
+class PhotoCorrection(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    reading: ScriptReading
+    reason: str = Field(min_length=10, max_length=1000)
+
+
+@app.get("/script-photo-readers")
+def photo_readers(user=Depends(current_user)):
+    from .script_reader import reader_status, choose_reader
+    try:
+        automatic = choose_reader()
+    except ValueError:
+        automatic = None
+    return {"available": reader_status(), "default": "auto", "automatic_reader": automatic}
+
+
+@app.get("/classes/{class_id}/script-photos/sample")
+def photo_sample(class_id: int, user=Depends(current_user), db=Depends(get_db)):
+    from .script_photos import sample_script
+    allowed_class(db, user, class_id)
+    learner = db.scalar(select(Learner).where(Learner.class_id == class_id).order_by(Learner.id))
+    return Response(sample_script(learner.id if learner else "DEMO-001"), media_type="image/png")
+
+
+@app.post("/classes/{class_id}/script-photos/sample", status_code=202)
+def start_photo_sample(class_id: int, user=Depends(current_user), db=Depends(get_db)):
+    from .script_photos import sample_script, accept_photo, public_photo
+    allowed_class(db, user, class_id)
+    learner = db.scalar(select(Learner).where(Learner.class_id == class_id).order_by(Learner.id))
+    item = accept_photo(db, user, class_id, sample_script(learner.id if learner else "DEMO-001"),
+                        "fictional-marked-test.png", reader="local")
+    db.commit()
+    return public_photo(item)
+
+
+@app.post("/classes/{class_id}/script-photos", status_code=202)
+async def upload_photo(class_id: int, request: Request, filename: str = "marked-script.jpg",
+        reader: Literal["auto", "local", "groq", "gemini"] = "auto",
+        user=Depends(current_user), db=Depends(get_db)):
+    from .script_photos import accept_photo, public_photo
+    from .script_reader import MAX_IMAGE_BYTES
+    allowed_class(db, user, class_id)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > MAX_IMAGE_BYTES:
+            raise HTTPException(413, "Photo exceeds 6 MB.")
+    item = accept_photo(db, user, class_id, bytes(raw), filename, reader)
+    db.commit()
+    return public_photo(item)
+
+
+@app.get("/classes/{class_id}/script-photos")
+def list_photos(class_id: int, user=Depends(current_user), db=Depends(get_db)):
+    from .db import ScriptPhoto
+    from .script_photos import public_photo
+    allowed_class(db, user, class_id)
+    return [public_photo(item, detail=False) for item in db.scalars(select(ScriptPhoto)
+        .where(ScriptPhoto.class_id == class_id).order_by(ScriptPhoto.created_at.desc()).limit(30))]
+
+
+@app.get("/classes/{class_id}/script-photos/{identifier}")
+def get_script_photo(class_id: int, identifier: str, user=Depends(current_user), db=Depends(get_db)):
+    from .script_photos import get_photo, public_photo
+    return public_photo(get_photo(db, user, class_id, identifier))
+
+
+@app.get("/classes/{class_id}/script-photos/{identifier}/image")
+def get_script_image(class_id: int, identifier: str, user=Depends(current_user), db=Depends(get_db)):
+    from .script_photos import get_photo
+    return Response(get_photo(db, user, class_id, identifier).image, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.post("/classes/{class_id}/script-photos/{identifier}/correction")
+def correct_script_photo(class_id: int, identifier: str, body: PhotoCorrection,
+        user=Depends(current_user), db=Depends(get_db)):
+    from .script_photos import get_photo, correct_reading, public_photo
+    item = get_photo(db, user, class_id, identifier)
+    correct_reading(db, user, class_id, item, body.reading, body.reason)
+    db.commit()
+    return public_photo(item)
 
 
 def settings_provider():

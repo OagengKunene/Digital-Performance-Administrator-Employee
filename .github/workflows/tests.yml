@@ -24,6 +24,8 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.lock.txt
       - run: python -m pip install --no-deps -e .
+      - name: Install photo OCR
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
       - name: SQLite and interface checks
         run: python -m pytest -q
       - name: PostgreSQL and interface checks

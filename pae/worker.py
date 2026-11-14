@@ -37,6 +37,8 @@ async def serve(once=False):
     if once:
         control_cycle(worker_id)
         await process_one(SessionLocal)
+        from .script_photos import process_photo
+        await asyncio.to_thread(process_photo, SessionLocal)
         return
 
     async def controls():
@@ -63,14 +65,26 @@ async def serve(once=False):
                 logger.error("Evaluation cycle failed error_type=%s", type(error).__name__)
             await asyncio.sleep(settings().worker_poll_seconds)
 
+    async def photos():
+        from .script_photos import process_photo
+        while True:
+            try:
+                await asyncio.to_thread(process_photo, SessionLocal)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.error("Photo cycle failed error_type=%s", type(error).__name__)
+            await asyncio.sleep(settings().worker_poll_seconds)
+
     # Ingestion and factual delivery keep running while a model request waits.
     async with asyncio.TaskGroup() as group:
         group.create_task(controls())
         group.create_task(evaluations())
+        group.create_task(photos())
 
 
 async def main(once=False):
-    if not inspect(engine).has_table("capture_events"):
+    if not all(inspect(engine).has_table(name) for name in ("capture_events", "script_photos")):
         raise SystemExit("Run .venv/bin/python scripts/setup.py to install dependencies and initialise new tables.")
     task = asyncio.current_task()
     loop = asyncio.get_running_loop()

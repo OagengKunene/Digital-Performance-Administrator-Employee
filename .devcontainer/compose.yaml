@@ -1,6 +1,8 @@
 services:
   workspace:
-    image: mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
     volumes:
       - ..:/workspaces/pae:cached
     command: sleep infinity

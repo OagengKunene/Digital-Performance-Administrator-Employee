@@ -11,7 +11,7 @@ st.title("Performance Administrator")
 st.caption("Assessment evidence, learner support and reviewed agent reports")
 
 
-def api(method, path, **kwargs):
+def api(method, path, *, binary=False, **kwargs):
     use_proxy = urlsplit(API).hostname not in {"127.0.0.1", "localhost"}
     headers = {}
     token = st.session_state.get("token")
@@ -32,7 +32,7 @@ def api(method, path, **kwargs):
             detail = f"Application request failed (HTTP {response.status_code}). Check the API terminal."
         st.error(str(detail))
         st.stop()
-    return response.json()
+    return response.content if binary else response.json()
 
 
 try:
@@ -79,7 +79,7 @@ try:
     selected = st.sidebar.selectbox("Class", classes, format_func=lambda c: c["name"] + " · " + c["subject"])
     cid = selected["id"]
     data = api("GET", f"/classes/{cid}/evidence")
-    view = st.sidebar.radio("Workspace", ["Overview", "Reports inbox", "Assessment sources", "Import records", "Learner support", "Agent reports", "Autonomous monitoring", "Audit history"])
+    view = st.sidebar.radio("Workspace", ["Overview", "Photo script demo", "Reports inbox", "Assessment sources", "Import records", "Learner support", "Agent reports", "Autonomous monitoring", "Audit history"])
     if view == "Overview":
         st.subheader(selected["name"] + " · " + selected["subject"])
         cols = st.columns(3)
@@ -93,6 +93,9 @@ try:
         with st.expander("Metric definitions"):
             st.json(data["definitions"])
         st.download_button("Download evidence JSON", json.dumps(data, indent=2), file_name=f"class-{cid}-evidence.json", mime="application/json")
+    elif view == "Photo script demo":
+        from pae.photo_ui import render_photo_demo
+        render_photo_demo(api, cid)
     elif view == "Reports inbox":
         st.subheader("Automatically delivered reports")
         st.caption("Assigned teachers and school principals receive capture reports here automatically. Data reports arrive independently of AI availability.")
@@ -137,7 +140,7 @@ try:
         inbox()
     elif view == "Assessment sources":
         st.subheader("Automatic assessment capture")
-        st.caption("Connect an existing marks/attendance CSV export once. New source records are validated, captured, evaluated and routed without a Run button. Scripts and handwritten work require a separate marking integration.")
+        st.caption("Connect an existing marks/attendance CSV export once. New source records are validated, captured, evaluated and routed without a Run button. For photographs of already marked scripts, open Photo script demo.")
         with st.expander("Connect a source"):
             with st.form("new-source"):
                 name = st.text_input("Source name", value="School marks export")
