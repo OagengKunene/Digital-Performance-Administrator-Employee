@@ -97,9 +97,10 @@ def main():
                     teacher_headers = {"Authorization": "Bearer " + response.json()["access_token"]}
                     delivered = client.get("http://127.0.0.1:8000/notifications", headers=teacher_headers).json()
                     assert any(m["kind"] == "capture_evaluation" for m in delivered)
-                    photo = client.post(prefix + "/script-photos/sample", headers=teacher_headers)
+                    photo = client.post(prefix + "/colleague-demo?reader=local", headers=teacher_headers)
                     photo.raise_for_status()
-                    identifier = photo.json()["id"]
+                    identifier = photo.json()["photo"]["id"]
+                    class_run_id = photo.json()["run"]["id"]
                     deadline = time.monotonic() + 30
                     while True:
                         result = client.get(prefix + "/script-photos/" + identifier, headers=teacher_headers).json()
@@ -110,11 +111,16 @@ def main():
                         time.sleep(0.2)
                     assert result["report"]["mean_percentage"] == 62.5
                     assert result["report"]["review"]["status"] == "passed"
+                    assert result["demonstrate_repair"] and result["repair_count"] >= 1
+                    assert any(e["phase"] == "correct" for e in result["activity"])
+                    class_run = client.get(prefix + "/runs/" + class_run_id, headers=teacher_headers).json()
+                    assert class_run["status"] == "verified_metrics"
+                    assert {e["phase"] for e in class_run["activity"]} >= {"plan", "act", "check"}
                     for audience in (headers, teacher_headers):
                         inbox = client.get("http://127.0.0.1:8000/notifications", headers=audience).json()
                         assert any(m["kind"] == "script_evaluation" for m in inbox)
                     assert client.get(prefix + "/statistics", headers=headers).json()["mean_percentage"] == 75
-                    print("PASS: all three services, watched CSV capture, automatic teacher/principal delivery, actual photo OCR and reviewed student report; no AI key or report prompt.")
+                    print("PASS: all three services, watched capture, both agent teams' visible plans/actions/checks, seeded photo error caught and corrected through real re-reading, and reviewed inbox delivery; no AI key or task prompt.")
             except Exception:
                 log.flush()
                 log.seek(0)

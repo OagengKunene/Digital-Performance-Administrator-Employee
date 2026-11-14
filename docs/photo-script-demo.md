@@ -9,6 +9,12 @@ The page polls once per second and displays the source image, extracted question
 marks, processing activity, report checks and final student report. Work continues
 in the background worker when the page is closed. Photo history survives restarts.
 
+The **Agent activity** workspace adds a shared plan/action/check/correction view
+for both teams and a controlled error-catching demonstration. Ordinary photos
+now automatically re-read disputed scores with a different processing strategy,
+within the three-read budget, before stopping for unresolved evidence. See the
+[visible agent demo guide](visible-agent-demo.md) for the complete loop.
+
 ## Update an existing Codespace
 
 Stop the app with Ctrl+C, then run each command separately:
@@ -79,7 +85,8 @@ Model availability and quality still require validation with the account's key.
   the original paper. Two agreeing OCR passes are not an accuracy guarantee.
 - A page containing only a readable awarded total can produce an overall report,
   with an explicit absence of question-level findings. No topic is invented.
-- Conflicting totals or unreadable readings pause automatically. Staff may upload
+- Conflicting totals or unreadable readings trigger bounded re-reading before an
+  unresolved case pauses. Staff may upload
   a clearer photo, select another available reader, or correct the transcription
   with a reason. The original extraction and before/after audit remain available;
   validation and reporting then resume automatically.

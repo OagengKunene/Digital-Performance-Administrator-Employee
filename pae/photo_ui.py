@@ -62,8 +62,8 @@ def render_photo_demo(api, cid):
     with right:
         st.write("Try the complete demo")
         st.caption("A fictional marked page is rendered and passed through real local OCR. No pre-filled extraction or report is used.")
-        if st.button("Try a sample marked script", disabled=not available["local"]):
-            item = api("POST", prefix + "/sample")
+        if st.button("Try a sample marked script", disabled=not bool(resolved or available["local"])):
+            item = api("POST", prefix + "/sample", params={"reader": reader})
             st.session_state["photo-choice-" + str(cid)] = item["id"]
         if not available["local"]:
             st.info("Run scripts/setup.py in Codespaces to install local OCR, or select a configured vision reader for your own photo.")
@@ -83,7 +83,7 @@ def render_photo_demo(api, cid):
     def live_capture():
         item = api("GET", prefix + "/" + identifier)
         status = item["status"]
-        steps = {"queued": (0.05, "Photo received"), "reading": (0.20, "Reading awarded marks"),
+        steps = {"queued": (0.05, "Photo received"), "planning": (0.10, "Coordinator planning the work"), "reading": (0.20, "Reading awarded marks"),
             "validating": (0.45, "Checking scores and totals"), "reporting": (0.65, "Preparing the student report"),
             "reviewing": (0.85, "Reviewing the report"), "completed": (1.0, "Report reviewed and delivered")}
         progress, label = steps.get(status, (0.45, "Photo needs attention"))
@@ -96,6 +96,9 @@ def render_photo_demo(api, cid):
             st.info("Live processing continues in the background. You can leave this page and return.")
         for issue in item["issues"]:
             st.warning(issue)
+        from .activity_ui import render_activity, render_photo_correction
+        render_photo_correction(item)
+        render_activity(item.get("activity", []), work_plan=item.get("work_plan"), status=item["status"])
         image_key = "script-photo-image-" + identifier
         if image_key not in st.session_state:
             st.session_state[image_key] = api("GET", prefix + "/" + identifier + "/image", binary=True)
@@ -165,7 +168,7 @@ def render_photo_demo(api, cid):
                             api("POST", prefix + "/" + identifier + "/correction", json={"reading": reading, "reason": reason})
                             st.rerun(scope="fragment")
         with st.expander("Live activity and source transcription"):
-            st.dataframe(item["events"], hide_index=True)
+            st.dataframe([{k: e.get(k, "") for k in ("stage", "phase", "message", "at")} for e in item["events"]], hide_index=True)
             if extraction.get("transcript"):
                 st.text(extraction["transcript"])
 

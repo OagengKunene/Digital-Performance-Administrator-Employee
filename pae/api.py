@@ -42,14 +42,48 @@ def photo_sample(class_id: int, user=Depends(current_user), db=Depends(get_db)):
 
 
 @app.post("/classes/{class_id}/script-photos/sample", status_code=202)
-def start_photo_sample(class_id: int, user=Depends(current_user), db=Depends(get_db)):
+def start_photo_sample(class_id: int, reader: Literal["auto", "local", "groq", "gemini"] = "auto",
+        user=Depends(current_user), db=Depends(get_db)):
     from .script_photos import sample_script, accept_photo, public_photo
+    from .script_reader import reader_status
     allowed_class(db, user, class_id)
     learner = db.scalar(select(Learner).where(Learner.class_id == class_id).order_by(Learner.id))
     item = accept_photo(db, user, class_id, sample_script(learner.id if learner else "DEMO-001"),
-                        "fictional-marked-test.png", reader="local")
+                        "fictional-marked-test.png", reader="local" if reader == "auto" and reader_status()["local"] else reader)
     db.commit()
     return public_photo(item)
+
+
+@app.post("/classes/{class_id}/colleague-demo", status_code=202)
+def start_colleague_demo(class_id: int, reader: Literal["auto", "local", "groq", "gemini"] = "auto",
+        user=Depends(current_user), db=Depends(get_db)):
+    from .script_photos import sample_script, accept_photo, public_photo
+    from .script_reader import reader_status
+    from .jobs import enqueue, public_run
+    allowed_class(db, user, class_id)
+    learner = db.scalar(select(Learner).where(Learner.class_id == class_id).order_by(Learner.id))
+    item = accept_photo(db, user, class_id,
+        sample_script(learner.id if learner else "DEMO-001", run_tag=uuid.uuid4().hex[:8]),
+        "controlled-correction-demo.png", reader="local" if reader == "auto" and reader_status()["local"] else reader,
+        demonstrate_repair=True)
+    active = db.scalar(select(AgentJob.id).where(AgentJob.active_class_id == class_id))
+    run = db.get(AgentRun, active) if active else enqueue(db, user, class_id,
+        "Review the current class evidence, delegate the required specialists, check the report and repair unsupported content.",
+        provider="offline", demonstrate_repair=True)
+    db.commit()
+    return {"photo": public_photo(item), "run": public_run(db, run), "class_report_reused": bool(active),
+        "demonstration": "The fictional photo's first transcription deliberately contains one error; correction must re-read its pixels."}
+
+
+@app.get("/classes/{class_id}/agent-activity")
+def agent_activity_jobs(class_id: int, user=Depends(current_user), db=Depends(get_db)):
+    from .db import ScriptPhoto
+    allowed_class(db, user, class_id)
+    jobs = [{"id": run.id, "kind": "class_report", "label": "Class agent report", "status": run.status, "at": run.at}
+            for run in db.scalars(select(AgentRun).where(AgentRun.class_id == class_id).order_by(AgentRun.at.desc()).limit(30))]
+    jobs += [{"id": photo.id, "kind": "script_photo", "label": photo.filename, "status": photo.status, "at": photo.created_at}
+             for photo in db.scalars(select(ScriptPhoto).where(ScriptPhoto.class_id == class_id).order_by(ScriptPhoto.created_at.desc()).limit(30))]
+    return sorted(jobs, key=lambda item: (item["at"], item["id"]), reverse=True)
 
 
 @app.post("/classes/{class_id}/script-photos", status_code=202)
