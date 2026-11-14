@@ -41,7 +41,14 @@ async def serve(once=False):
 
     async def controls():
         while True:
-            await asyncio.to_thread(control_cycle, worker_id)
+            try:
+                await asyncio.to_thread(control_cycle, worker_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                # Heartbeat/database setup can fail before action-level guards.
+                # Keep both loops alive and try again on the next control cycle.
+                logger.error("Control cycle failed error_type=%s", type(error).__name__)
             await asyncio.sleep(settings().worker_poll_seconds)
 
     async def evaluations():

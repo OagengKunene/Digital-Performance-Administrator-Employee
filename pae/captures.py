@@ -121,9 +121,21 @@ def recover_due(factory):
     """Retry captured evaluations without a new prompt, within their original budget."""
     from .jobs import resume
     now = time.time()
+    providers = [name for name in ("gemini", "groq", "offline") if configured(name)]
     with factory() as db:
-        candidates = db.scalars(select(CaptureEvent).where(
-            CaptureEvent.evaluation_status == "failed").limit(20)).all()
+        # Filter before limiting: an old backlog of exhausted, cooling-down or
+        # unconfigured jobs must not hide later captures that can recover now.
+        candidates = db.scalars(select(CaptureEvent)
+            .join(AgentJob, CaptureEvent.run_id == AgentJob.id)
+            .join(AgentRun, AgentJob.id == AgentRun.id).where(
+                CaptureEvent.evaluation_status == "failed", AgentJob.status == "failed",
+                AgentJob.next_at <= now, AgentJob.provider.in_(providers),
+                AgentJob.state["request_attempts"].as_integer() < AgentJob.state["request_budget"].as_integer(),
+                AgentRun.result["error_code"].as_string().in_([
+                    "provider_unavailable", "provider_connection", "ai_timeout", "provider_quota", "provider_credentials"]),
+                CaptureEvent.class_id.not_in(select(AgentJob.active_class_id).where(
+                    AgentJob.active_class_id.is_not(None))))
+            .order_by(AgentJob.next_at, CaptureEvent.created_at, CaptureEvent.id).limit(20)).all()
         for item in candidates:
             run, job = db.get(AgentRun, item.run_id), db.get(AgentJob, item.run_id)
             if not run or not job or job.next_at > now:

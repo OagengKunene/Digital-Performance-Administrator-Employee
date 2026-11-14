@@ -174,4 +174,10 @@ Invite collaborators through repository **Settings → Collaborators**. Separate
 
 Tests exercise access isolation, record integrity, ADK stage execution, the actual Groq/LiteLLM connector with inference mocked, checkpoints, recovery, repair, fencing, monitoring and the interface. They do not certify live provider availability or a school rollout. GitHub Actions repeats the suite against PostgreSQL and builds/smoke-tests the Docker image.
 
+For actual API/worker restart, SIGKILL recovery and certificate-verified local SMTP
+retry checks, run `.venv/bin/python scripts/reliability_check.py` on Linux. This uses
+an isolated fictional database and no inference keys or external email delivery.
+See [operational reliability validation](docs/reliability.md) for scenarios,
+reproduced failures, fixes and remaining deployment checks.
+
 See [architecture.md](docs/architecture.md) and [deployment.md](docs/deployment.md) for implemented boundaries and hosting requirements.

@@ -30,6 +30,8 @@ jobs:
         run: python -m pytest -q
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pae:test_password@localhost:5432/pae_test
+      - name: Process restart, crash recovery and TLS mail delivery
+        run: python scripts/reliability_check.py
       - name: Build deployable image
         run: docker build -t pae:ci .
       - name: Container bootstrap smoke test
